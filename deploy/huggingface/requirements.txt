@@ -1,8 +1,14 @@
-# HF Gradio SDK uses this at build time. We don't actually use Gradio — the
-# landing at / is a tiny inline HTML string served by FastAPI — but the SDK
-# still installs gradio[oauth] into the container. That's fine; our app just
-# ignores it.
-fastapi>=0.115
-uvicorn[standard]>=0.30
+# HF's Gradio SDK free-tier image ships packages that are too NEW for the
+# Gradio version it bundles (Gradio 4.44). Specifically:
+#   - Starlette 1.10 broke Gradio's TemplateResponse() call signature
+#   - huggingface_hub >= 0.26 removed HfFolder that gradio.oauth imports
+# We don't actually use Gradio for anything functional (our landing is a
+# simple Markdown) but importing it still happens in app.py. Hold the deps
+# at versions Gradio 4.44 can work with.
+starlette<0.40
+huggingface_hub<0.26
+
+fastapi<0.120
+uvicorn[standard]>=0.30,<1.0
 
 fitness-mcp @ git+https://github.com/letsjustrun/fitness-mcp.git@main
