@@ -75,10 +75,10 @@ Click **Restart Space** after setting the variable so it takes effect.
 
 ```bash
 # Replace <you> with your HF username
-curl -s https://<you>-fitness-mcp.hf.space/healthz
+curl -s https://<you>-fitness-mcp.hf.space/api/healthz
 # -> {"status":"ok"}
 
-curl -s -o /dev/null -w "%{http_code}\n" -X POST https://<you>-fitness-mcp.hf.space/mcp
+curl -s -o /dev/null -w "%{http_code}\n" -X POST https://<you>-fitness-mcp.hf.space/api/mcp
 # -> 401  (missing bearer header)
 
 curl -s -o /dev/null -w "%{http_code}\n" -X POST \
@@ -86,7 +86,7 @@ curl -s -o /dev/null -w "%{http_code}\n" -X POST \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}' \
-  https://<you>-fitness-mcp.hf.space/mcp
+  https://<you>-fitness-mcp.hf.space/api/mcp
 # -> 200
 ```
 
@@ -98,7 +98,7 @@ The `/ui` page in the Space preview should render a short landing with instructi
 
 ### iPhone / iPad / claude.ai web
 1. Settings → **Connectors** → **Add custom connector**.
-2. URL: `https://<you>-fitness-mcp.hf.space/mcp`
+2. URL: `https://<you>-fitness-mcp.hf.space/api/mcp`
 3. Header: `Authorization: Bearer <your-garmin-personal-api-token>`
 4. Open a new chat, ask about your Garmin data.
 
@@ -108,7 +108,7 @@ See the HF Space README.
 ### Claude Code
 ```bash
 claude mcp add --transport http fitness \
-  "https://<you>-fitness-mcp.hf.space/mcp" \
+  "https://<you>-fitness-mcp.hf.space/api/mcp" \
   --header "Authorization: Bearer <your-garmin-personal-api-token>"
 ```
 
