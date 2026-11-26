@@ -1,4 +1,4 @@
-"""Hugging Face Space entry point (Gradio SDK, free tier).
+"""Hugging Face Space entry point (Gradio SDK, Zero GPU free tier).
 
 Multi-tenant HTTP server. No server-side secrets — each user supplies their
 own Garmin Personal API key via `Authorization: Bearer <key>` on every
@@ -8,6 +8,11 @@ Public routes (port 7860):
     /               → Gradio landing (what HF's health probe hits)
     /x/healthz      → MCP health probe
     /x/mcp          → MCP Streamable HTTP endpoint
+
+Zero GPU quota: ~5 GPU-minutes/day for free accounts. The heartbeat below
+consumes a tiny slice per MCP request — fine for ad-hoc iPhone testing,
+not for sustained traffic. Move to CPU basic (requires a new Space) or
+a different host (Render / tunnel) if you need always-on service.
 """
 # --------------------------------------------------------------------------
 # Gradio 4.44's gradio.oauth does `from huggingface_hub import HfFolder`
@@ -38,6 +43,7 @@ import os
 import gradio as gr
 import uvicorn
 from gradio.routes import App as GradioApp
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from fitness_mcp.config import get_settings
 from fitness_mcp.http_server import build_asgi_app
@@ -46,18 +52,49 @@ from fitness_mcp.server import create_app
 MCP_MOUNT_PATH = "/x"
 
 
-# HF Zero GPU killswitch: orchestrator kills Spaces that don't declare at
-# least one @spaces.GPU-decorated function with
-# "No @spaces.GPU function detected during startup". We don't need a GPU —
-# this decoy is never called.
+# --------------------------------------------------------------------------
+# HF Zero GPU heartbeat.
+# --------------------------------------------------------------------------
+# On Zero GPU hardware, the orchestrator reaps containers whose @spaces.GPU
+# functions aren't actively invoked. Declaring one at startup isn't enough;
+# it must be CALLED. We use a trivial decorated no-op and invoke it on every
+# MCP request via middleware.
+#
+# When running on CPU basic (no `spaces` module) the import fails and the
+# heartbeat is a no-op — the same app.py works on both hardware tiers.
+# --------------------------------------------------------------------------
 try:
     import spaces  # type: ignore
 
     @spaces.GPU  # type: ignore[misc]
-    def _zero_gpu_decoy():
+    def _zero_gpu_heartbeat():
+        """Touched on every MCP request. Does no real GPU work."""
         return "ok"
+
+    _HAVE_SPACES = True
 except ImportError:
-    pass
+    _HAVE_SPACES = False
+
+    def _zero_gpu_heartbeat():
+        return "ok"
+
+
+class ZeroGPUHeartbeatMiddleware:
+    """ASGI middleware that calls the @spaces.GPU-decorated heartbeat before
+    passing the request through. No-op on CPU hardware (spaces not installed).
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self._app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if _HAVE_SPACES and scope["type"] == "http" and scope.get("method") != "OPTIONS":
+            try:
+                _zero_gpu_heartbeat()
+            except Exception:
+                # Never fail a user request because of the heartbeat.
+                pass
+        await self._app(scope, receive, send)
 
 
 def build_landing(public_mcp_url_hint: str) -> gr.Blocks:
@@ -105,15 +142,12 @@ def main() -> None:
     landing = build_landing(public_mcp_url)
     landing.queue()
 
-    # Get Gradio's FastAPI without launching it ourselves — gives us the
-    # chance to patch the lifespan context BEFORE uvicorn runs.
+    # Get Gradio's FastAPI without launching uvicorn. Lets us patch the
+    # lifespan to compose Gradio's startup/shutdown with the MCP server's
+    # lifespan (the MCP session manager's task group gets initialized this
+    # way; otherwise /x/mcp fails with "Task group is not initialized").
     gradio_app = GradioApp.create_app(landing)
 
-    # Compose Gradio's own lifespan with our MCP app's lifespan. Mounting
-    # mcp_asgi below would normally orphan its lifespan (Starlette doesn't
-    # cascade to mounted sub-apps) and the MCP session manager's task group
-    # never gets initialized — every request would crash with
-    # "Task group is not initialized. Make sure to use run()."
     original_lifespan = gradio_app.router.lifespan_context
 
     @contextlib.asynccontextmanager
@@ -124,11 +158,22 @@ def main() -> None:
 
     gradio_app.router.lifespan_context = combined_lifespan
 
-    # Mount MCP at /x (we moved off /api because Gradio reserves /api/*
-    # for its own JSON-RPC routes).
+    # Keep Zero GPU happy: heartbeat the orchestrator on every request.
+    gradio_app.add_middleware(ZeroGPUHeartbeatMiddleware)
+
+    # Mount at /x (Gradio owns /api/* for its own JSON-RPC routes).
     gradio_app.mount(MCP_MOUNT_PATH, mcp_asgi)
 
+    # Touch the heartbeat once at startup so Zero GPU allocates a slot
+    # before the first user request arrives.
+    try:
+        _zero_gpu_heartbeat()
+    except Exception:
+        pass
+
     port = int(os.environ.get("PORT", 7860))
+    print(f"Running on local URL:  http://0.0.0.0:{port}", flush=True)
+    print("To create a public link, set `share=True` in `launch()`.", flush=True)
     uvicorn.run(
         gradio_app, host="0.0.0.0", port=port,
         log_level=settings.log_level.lower(),
