@@ -55,9 +55,27 @@ class Settings(BaseSettings):
     # needs the appropriate value here. Default is empty (no CORS headers).
     http_cors_origins: str = Field(default="", alias="FITNESS_MCP_HTTP_CORS_ORIGINS")
 
+    # Comma-separated list of hostnames the MCP SDK will accept in the Host
+    # header (DNS-rebinding protection). Leave empty to allow the SDK's
+    # defaults (localhost + whatever you pass as the bind host). Set this to
+    # the Space's public domain when running behind a tunnel or on HF:
+    #   FITNESS_MCP_HTTP_ALLOWED_HOSTS=you-space.hf.space,you-space.hf.space:443
+    http_allowed_hosts: str = Field(default="", alias="FITNESS_MCP_HTTP_ALLOWED_HOSTS")
+
+    # Disable DNS-rebinding protection entirely. Use only when the server is
+    # exposed on a well-known public host AND the perimeter is already
+    # trusted (tunnel ACL, cloud WAF). Convenient on HF; dangerous in general.
+    http_disable_dns_rebinding: bool = Field(
+        default=False, alias="FITNESS_MCP_HTTP_DISABLE_DNS_REBINDING",
+    )
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.http_cors_origins.split(",") if o.strip()]
+
+    @property
+    def allowed_hosts_list(self) -> list[str]:
+        return [h.strip() for h in self.http_allowed_hosts.split(",") if h.strip()]
 
 
 @lru_cache(maxsize=1)

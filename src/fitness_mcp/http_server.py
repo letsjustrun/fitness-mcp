@@ -20,6 +20,7 @@ import logging
 
 import uvicorn
 from mcp.server.mcpserver import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
@@ -97,9 +98,14 @@ def build_asgi_app(mcp: MCPServer, settings: Settings) -> Starlette:
     does not cascade lifespan events to mounted sub-apps and the MCP session
     manager relies on its lifespan to initialize.
     """
+    tsec = TransportSecuritySettings(
+        enable_dns_rebinding_protection=not settings.http_disable_dns_rebinding,
+        allowed_hosts=settings.allowed_hosts_list,
+    )
     app = mcp.streamable_http_app(
         streamable_http_path=settings.http_path,
         host=settings.http_host,
+        transport_security=tsec,
     )
 
     # Prepend /healthz so it wins before the MCP matcher sees the request.
