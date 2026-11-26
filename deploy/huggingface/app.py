@@ -43,7 +43,6 @@ import os
 import gradio as gr
 import uvicorn
 from gradio.routes import App as GradioApp
-from starlette.types import ASGIApp, Receive, Scope, Send
 
 from fitness_mcp.config import get_settings
 from fitness_mcp.http_server import build_asgi_app
@@ -79,22 +78,35 @@ except ImportError:
         return "ok"
 
 
-class ZeroGPUHeartbeatMiddleware:
-    """ASGI middleware that calls the @spaces.GPU-decorated heartbeat before
-    passing the request through. No-op on CPU hardware (spaces not installed).
+def _start_zero_gpu_background_heartbeat(interval_seconds: int = 60) -> None:
+    """Fire the @spaces.GPU heartbeat periodically in a background thread.
+
+    Doing this inline on every HTTP request added 30–50 s of GPU-allocation
+    latency per MCP call — Claude Desktop's SDK gave up at 30 s and dropped
+    our tools from the session. A quiet background tick keeps the Zero GPU
+    orchestrator satisfied without touching the request hot path.
     """
+    if not _HAVE_SPACES:
+        return
 
-    def __init__(self, app: ASGIApp) -> None:
-        self._app = app
+    import threading
+    import time
 
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if _HAVE_SPACES and scope["type"] == "http" and scope.get("method") != "OPTIONS":
+    def _loop() -> None:
+        # Touch once immediately so the first tick lands early.
+        try:
+            _zero_gpu_heartbeat()
+        except Exception:
+            pass
+        while True:
             try:
+                time.sleep(interval_seconds)
                 _zero_gpu_heartbeat()
             except Exception:
-                # Never fail a user request because of the heartbeat.
+                # A failed heartbeat shouldn't stop the loop.
                 pass
-        await self._app(scope, receive, send)
+
+    threading.Thread(target=_loop, name="zero-gpu-heartbeat", daemon=True).start()
 
 
 def build_landing(public_mcp_url_hint: str) -> gr.Blocks:
@@ -170,18 +182,14 @@ def main() -> None:
 
     gradio_app.router.lifespan_context = combined_lifespan
 
-    # Keep Zero GPU happy: heartbeat the orchestrator on every request.
-    gradio_app.add_middleware(ZeroGPUHeartbeatMiddleware)
-
     # Mount at /x (Gradio owns /api/* for its own JSON-RPC routes).
     gradio_app.mount(MCP_MOUNT_PATH, mcp_asgi)
 
-    # Touch the heartbeat once at startup so Zero GPU allocates a slot
-    # before the first user request arrives.
-    try:
-        _zero_gpu_heartbeat()
-    except Exception:
-        pass
+    # Keep Zero GPU happy with a periodic background tick — NOT in the
+    # request path. Per-request @spaces.GPU calls added 30–50s of GPU
+    # allocation latency per MCP call, which blew Claude Desktop's
+    # 30 s request timeout.
+    _start_zero_gpu_background_heartbeat(interval_seconds=60)
 
     port = int(os.environ.get("PORT", 7860))
     print(f"Running on local URL:  http://0.0.0.0:{port}", flush=True)
