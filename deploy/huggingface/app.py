@@ -4,10 +4,13 @@ Multi-tenant HTTP server. No server-side secrets — each user supplies their
 own Garmin Personal API key via `Authorization: Bearer <key>` on every
 request. See the GitHub README for the full auth model.
 
-HF's Gradio SDK runs a health probe against `/` on port 7860 and kills the
-container if it doesn't look like a Gradio app. So we mount Gradio at `/`
-(landing page + health check surface) and our MCP server at a sub-path:
+HF's Gradio SDK probes port 7860 with Gradio-shaped requests and recycles
+containers that don't answer them. To satisfy both HF and our MCP transport
+we let Gradio build its own FastAPI (including `/`, `/info`, `/config`,
+`/api/predict`, websocket, …), then mount the MCP Starlette app at `/api`.
+Uvicorn launches that combined app.
 
+Public routes:
     /               → Gradio landing (also what HF probes)
     /api/healthz    → MCP health
     /api/mcp        → MCP Streamable HTTP endpoint
@@ -18,13 +21,12 @@ import os
 
 import gradio as gr
 import uvicorn
-from fastapi import FastAPI
+from gradio.routes import App as GradioApp
 
 from fitness_mcp.config import get_settings
 from fitness_mcp.http_server import build_asgi_app
 from fitness_mcp.server import create_app
 
-# URL suffix exposed to end users. Must match deploy/huggingface/README.md.
 MCP_MOUNT_PATH = "/api"
 
 
@@ -41,14 +43,14 @@ def build_landing(public_mcp_url_hint: str) -> gr.Blocks:
 
             This Space stores no Garmin credentials. Every request must
             carry *your own* Garmin Personal API Token in the Authorization
-            header. Cache rows are keyed by the hash of your key.
+            header. SQLite cache rows are keyed by the hash of your key.
 
             ## Add as a Claude Connector
 
             - **URL**: `{public_mcp_url_hint}`
             - **Authorization**: `Bearer <your-garmin-personal-api-key>`
 
-            Get the key from Garmin Connect → Settings → Account →
+            Get your key from Garmin Connect → Settings → Account →
             Personal API Token.
 
             ## Also
@@ -65,23 +67,21 @@ def main() -> None:
     settings = get_settings()
     mcp_asgi = build_asgi_app(create_app(), settings)
 
-    # URL hint shown on the Gradio landing. HF doesn't tell us the Space's
-    # external hostname, so we construct it from SPACE_ID (set by HF).
     space_id = os.environ.get("SPACE_ID", "<owner>/<space>")
     owner, _, space = space_id.partition("/")
     host = f"{owner}-{space}.hf.space" if space else "<this-space>.hf.space"
     public_mcp_url = f"https://{host}{MCP_MOUNT_PATH}{settings.http_path}"
 
     landing = build_landing(public_mcp_url)
+    landing.queue()  # HF's probe expects the Gradio queue to be running
 
-    outer = FastAPI()
-    # Mount MCP FIRST so /api/* beats Gradio's / catch-all.
-    outer.mount(MCP_MOUNT_PATH, mcp_asgi)
-    # Gradio owns / — that's what HF's health probe hits.
-    outer = gr.mount_gradio_app(outer, landing, path="/")
+    # Let Gradio build its own FastAPI app (gives HF everything it probes)
+    # then layer our MCP ASGI onto it at /api.
+    gradio_app = GradioApp.create_app(landing)
+    gradio_app.mount(MCP_MOUNT_PATH, mcp_asgi)
 
     port = int(os.environ.get("PORT", 7860))
-    uvicorn.run(outer, host="0.0.0.0", port=port, log_level=settings.log_level.lower())
+    uvicorn.run(gradio_app, host="0.0.0.0", port=port, log_level=settings.log_level.lower())
 
 
 if __name__ == "__main__":
