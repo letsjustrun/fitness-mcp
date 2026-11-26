@@ -1,7 +1,6 @@
-# HF Gradio SDK installs this at build time.
-# The Space's app.py imports fitness_mcp — we pull it from GitHub since
-# we're not published on PyPI. Pin to main so updates land on redeploy.
-gradio>=4.44
+# HF Gradio SDK installs this at build time on top of its pre-installed
+# gradio (set by sdk_version in README front-matter). We don't pin gradio
+# here — HF owns that version pin and we're compatible with 5.x.
 fastapi>=0.115
 uvicorn[standard]>=0.30
 
