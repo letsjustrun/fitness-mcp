@@ -1,0 +1,40 @@
+# Keep the build context small — only what the Dockerfile COPYs needs to ship.
+.git/
+.github/
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Build outputs — no reason to ship these into the image
+build/
+dist/
+
+# Dev-only directories
+tests/
+docs/
+dxt/
+scripts/
+
+# Agent / editor files
+CLAUDE.md
+.idea/
+.vscode/
+.DS_Store
+
+# HF-specific docs — only used during deploy
+deploy/
