@@ -1,24 +1,19 @@
-"""Hugging Face Space entry point (Gradio SDK, CPU basic free tier).
+"""Hugging Face Space entry point (Gradio SDK, free tier).
 
 Multi-tenant HTTP server. No server-side secrets — each user supplies their
 own Garmin Personal API key via `Authorization: Bearer <key>` on every
 request.
 
-Public routes (all on port 7860):
-    /               → tiny Gradio landing (what HF's health probe hits)
-    /api/healthz    → MCP health probe
-    /api/mcp        → MCP Streamable HTTP endpoint
-
-Important: this Space must run on **CPU basic**, not Zero GPU. Zero GPU
-expects at least one `@spaces.GPU`-decorated function and kills the
-container if it doesn't find one.
+Public routes (port 7860):
+    /               → Gradio landing (what HF's health probe hits)
+    /x/healthz      → MCP health probe
+    /x/mcp          → MCP Streamable HTTP endpoint
 """
 # --------------------------------------------------------------------------
-# HF's Gradio SDK free-tier image ships huggingface_hub >= 0.26, but
 # Gradio 4.44's gradio.oauth does `from huggingface_hub import HfFolder`
-# which was removed in 0.26+. Our huggingface_hub<0.26 pin in requirements
-# is ignored because pip won't downgrade already-installed packages without
-# --force-reinstall. Stub HfFolder onto the module before any gradio import.
+# which was removed in huggingface_hub 0.26+. Pin in requirements.txt is
+# ignored because pip refuses to downgrade pre-installed base packages.
+# Stub HfFolder before any gradio import.
 # --------------------------------------------------------------------------
 import huggingface_hub as _hf_hub
 if not hasattr(_hf_hub, "HfFolder"):
@@ -36,10 +31,13 @@ if not hasattr(_hf_hub, "HfFolder"):
             pass
     _hf_hub.HfFolder = HfFolder
 
+
+import contextlib
 import os
-import threading
 
 import gradio as gr
+import uvicorn
+from gradio.routes import App as GradioApp
 
 from fitness_mcp.config import get_settings
 from fitness_mcp.http_server import build_asgi_app
@@ -48,20 +46,17 @@ from fitness_mcp.server import create_app
 MCP_MOUNT_PATH = "/x"
 
 
-# HF Zero GPU killswitch: the orchestrator kills Spaces that don't declare at
-# least one @spaces.GPU-decorated function on startup with
-# "No @spaces.GPU function detected during startup". We don't actually need
-# a GPU — this stub is never called. Only runs when the `spaces` module is
-# importable (which it is in the HF container).
+# HF Zero GPU killswitch: orchestrator kills Spaces that don't declare at
+# least one @spaces.GPU-decorated function with
+# "No @spaces.GPU function detected during startup". We don't need a GPU —
+# this decoy is never called.
 try:
     import spaces  # type: ignore
 
     @spaces.GPU  # type: ignore[misc]
     def _zero_gpu_decoy():
-        """Decoy so HF Zero GPU orchestrator keeps the container alive."""
         return "ok"
 except ImportError:
-    # Running locally; no `spaces` package. Nothing to do.
     pass
 
 
@@ -110,20 +105,34 @@ def main() -> None:
     landing = build_landing(public_mcp_url)
     landing.queue()
 
+    # Get Gradio's FastAPI without launching it ourselves — gives us the
+    # chance to patch the lifespan context BEFORE uvicorn runs.
+    gradio_app = GradioApp.create_app(landing)
+
+    # Compose Gradio's own lifespan with our MCP app's lifespan. Mounting
+    # mcp_asgi below would normally orphan its lifespan (Starlette doesn't
+    # cascade to mounted sub-apps) and the MCP session manager's task group
+    # never gets initialized — every request would crash with
+    # "Task group is not initialized. Make sure to use run()."
+    original_lifespan = gradio_app.router.lifespan_context
+
+    @contextlib.asynccontextmanager
+    async def combined_lifespan(app):
+        async with mcp_asgi.router.lifespan_context(mcp_asgi):
+            async with original_lifespan(app):
+                yield
+
+    gradio_app.router.lifespan_context = combined_lifespan
+
+    # Mount MCP at /x (we moved off /api because Gradio reserves /api/*
+    # for its own JSON-RPC routes).
+    gradio_app.mount(MCP_MOUNT_PATH, mcp_asgi)
+
     port = int(os.environ.get("PORT", 7860))
-    # prevent_thread_lock returns once uvicorn is bound; we then mount our
-    # MCP ASGI onto landing.app. Starlette looks up mounts per-request so
-    # late registration is fine.
-    landing.launch(
-        server_name="0.0.0.0",
-        server_port=port,
-        prevent_thread_lock=True,
-        inbrowser=False,
-        show_api=False,
-        quiet=False,
+    uvicorn.run(
+        gradio_app, host="0.0.0.0", port=port,
+        log_level=settings.log_level.lower(),
     )
-    landing.app.mount(MCP_MOUNT_PATH, mcp_asgi)
-    threading.Event().wait()
 
 
 if __name__ == "__main__":
