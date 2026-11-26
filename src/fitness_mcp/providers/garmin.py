@@ -47,22 +47,26 @@ class GarminProvider(Provider):
         api_key: str,
         http_timeout: float = 30.0,
         ca_bundle: str | None = None,
+        token_cache_file: str | None = None,
     ) -> None:
         if not api_key:
             raise ProviderAuthError(
-                "GARMIN_PERSONAL_API_KEY is empty. Open Garmin Connect web > "
-                "Settings > Account > Personal API Token, create a key, "
-                "and add it to .env."
+                "Garmin Personal API key is empty. In HTTP mode, Claude must "
+                "send 'Authorization: Bearer <your-garmin-key>'. In stdio mode, "
+                "set GARMIN_PERSONAL_API_KEY in .env."
             )
         self._api_key = api_key
         self._timeout = http_timeout
         self._session = requests.Session()
         if ca_bundle:
             self._session.verify = ca_bundle
-        self._authenticator = PersonalApiAuthenticator(
-            timeout=http_timeout,
-            session=self._session,
-        )
+        auth_kwargs: dict[str, object] = {
+            "timeout": http_timeout,
+            "session": self._session,
+        }
+        if token_cache_file is not None:
+            auth_kwargs["bearer_token_cache_file"] = token_cache_file
+        self._authenticator = PersonalApiAuthenticator(**auth_kwargs)
         self._client: GarminPersonalApiClient | None = None
         self._lock = asyncio.Lock()
 

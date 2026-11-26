@@ -149,22 +149,24 @@ Then add `FITNESS_MCP_CA_BUNDLE=$HOME/.fitness_mcp/ca_bundle.pem` to your env (o
 
 ---
 
-## Self-host over HTTP (optional)
+## Self-host over HTTP (multi-tenant)
 
-If you want one long-running server that many clients share:
+HTTP mode is **multi-tenant and credential-free on the server**. Each user's `Authorization: Bearer <key>` *is* their Garmin Personal API Token. The server:
+
+- extracts the key from the header per request
+- uses it to call Garmin for that request only
+- never stores any Garmin credentials
+- isolates each user's SQLite cache rows via `sha256(key)[:16]`
+
+Run it:
 
 ```bash
-# Generate a bearer token (anyone with this token can call the server)
-TOKEN=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')
-
-FITNESS_MCP_HTTP_BEARER_TOKENS="$TOKEN" \
-GARMIN_PERSONAL_API_KEY="your-key" \
-  fitness-mcp --http --host 127.0.0.1 --port 8000
+fitness-mcp --http --host 0.0.0.0 --port 8000
 ```
 
-Safety rail: the server refuses to bind off localhost without a token set.
+Clients connect to `http://your-host:8000/mcp` with their **own** Garmin key in the Authorization header. One Space / server can safely serve many users.
 
-Clients then connect to `http://your-host:8000/mcp` with `Authorization: Bearer <token>`. For public exposure, terminate TLS at a reverse proxy (cloudflared, Caddy, nginx) and keep the token strong. Full HTTP + scaling notes in [`docs/architecture.md`](docs/architecture.md).
+For public exposure, terminate TLS at a reverse proxy (cloudflared, Caddy, nginx). Full architecture notes in [`docs/architecture.md`](docs/architecture.md) and the Hugging Face Spaces deploy walkthrough in [`deploy/huggingface/DEPLOY.md`](deploy/huggingface/DEPLOY.md).
 
 ---
 
@@ -174,7 +176,7 @@ All settings are env vars (loaded from the process environment or `.env` in the 
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `GARMIN_PERSONAL_API_KEY` | — | **Required.** Your Garmin Personal API key. |
+| `GARMIN_PERSONAL_API_KEY` | — | **Required in stdio mode.** In HTTP mode the key comes from the per-request Authorization header instead. |
 | `FITNESS_MCP_TRANSPORT` | `stdio` | `stdio` or `http`. |
 | `FITNESS_MCP_DB_PATH` | `~/.fitness_mcp/data.db` | SQLite cache location. |
 | `FITNESS_MCP_LOG_LEVEL` | `INFO` | `DEBUG`/`INFO`/`WARNING`/`ERROR`. |
@@ -184,7 +186,6 @@ All settings are env vars (loaded from the process environment or `.env` in the 
 | `FITNESS_MCP_HTTP_HOST` | `127.0.0.1` | HTTP bind host. |
 | `FITNESS_MCP_HTTP_PORT` | `8000` | HTTP port. |
 | `FITNESS_MCP_HTTP_PATH` | `/mcp` | HTTP mount path. |
-| `FITNESS_MCP_HTTP_BEARER_TOKENS` | *(empty)* | Comma-separated list of accepted bearer tokens. Required to bind off localhost. |
 | `FITNESS_MCP_HTTP_CORS_ORIGINS` | *(empty)* | Comma-separated origins for claude.ai web. |
 
 ---

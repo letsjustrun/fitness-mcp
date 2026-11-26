@@ -1,14 +1,33 @@
-"""Provider registry.
+"""Per-request Garmin provider resolution.
 
-Factories are lazy — missing credentials for one provider don't stop another
-from working. The registry is a singleton (`default_registry`) but tests can
-instantiate their own and inject fakes.
+HTTP transport
+--------------
+The ASGI middleware sets `current_garmin_key` and `current_tenant_id` on the
+context var. `get_garmin_provider()` returns a `GarminProvider` instance
+dedicated to that tenant, with its own on-disk Garmin bearer-token cache so
+users never share bearer tokens.
+
+Instances are memoized per tenant in-process so repeated requests reuse the
+same `requests.Session` and the same cached Garmin bearer. Memory grows with
+distinct users — acceptable for a POC.
+
+Stdio transport
+---------------
+No middleware runs; context vars are None. We fall back to the env-only
+`GARMIN_PERSONAL_API_KEY` for a single-user local install.
+
+Tests
+-----
+`set_test_provider(tenant_id, provider)` injects a fake. The lookup checks
+the test map before ever touching network/auth code.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
-from collections.abc import Callable
+from pathlib import Path
 
+from ..auth import current_garmin_key, current_tenant_id, tenant_id_from_key
 from ..config import get_settings
 from ..errors import ProviderAuthError
 from .base import Provider
@@ -17,52 +36,73 @@ from .garmin import GarminProvider
 log = logging.getLogger(__name__)
 
 
-class ProviderRegistry:
-    def __init__(self) -> None:
-        self._factories: dict[str, Callable[[], Provider]] = {}
-        self._instances: dict[str, Provider] = {}
+_cache: dict[str, Provider] = {}
+_cache_lock = asyncio.Lock()
 
-    def register(self, name: str, factory: Callable[[], Provider]) -> None:
-        self._factories[name] = factory
+#: Test hook. If a tenant_id maps here, we return the override instead of
+#: building a real GarminProvider. Set via `set_test_provider`.
+_test_overrides: dict[str, Provider] = {}
 
-    def override(self, name: str, provider: Provider) -> None:
-        """Test hook: inject a concrete provider and skip the factory."""
-        self._instances[name] = provider
+#: Where to keep each tenant's Garmin bearer-token JSON cache. On HF Spaces
+#: this is wiped between container restarts, which is harmless — the key
+#: itself keeps working, we just re-exchange once.
+_TOKEN_CACHE_DIR = Path("/tmp/fitness_mcp/garmin-tokens")
 
-    def get(self, name: str) -> Provider:
-        if name in self._instances:
-            return self._instances[name]
-        if name not in self._factories:
-            raise KeyError(
-                f"No provider '{name}'. Registered: {sorted(self._factories)}"
+
+async def get_garmin_provider() -> tuple[Provider, str]:
+    """Resolve the Garmin provider for the current request.
+
+    Returns a (provider, tenant_id) pair. The tenant_id is the hash of the
+    user's Garmin key — safe to use in SQL, log lines, and cache paths.
+    """
+    key = current_garmin_key.get()
+    if key is None:
+        # stdio fallback
+        s = get_settings()
+        if not s.garmin_personal_api_key:
+            raise ProviderAuthError(
+                "No Garmin Personal API key available. HTTP clients must send "
+                "'Authorization: Bearer <your-garmin-key>'. Stdio installs "
+                "should set GARMIN_PERSONAL_API_KEY in their environment."
             )
-        self._instances[name] = self._factories[name]()
-        return self._instances[name]
+        key = s.garmin_personal_api_key
+    tenant = current_tenant_id.get() or tenant_id_from_key(key)
 
-    def names(self) -> list[str]:
-        return sorted(self._factories)
+    # Tests first — never touch GarminProvider when a fake is wired in.
+    if tenant in _test_overrides:
+        return _test_overrides[tenant], tenant
 
-    async def close_all(self) -> None:
-        for p in list(self._instances.values()):
+    async with _cache_lock:
+        provider = _cache.get(tenant)
+        if provider is None:
+            s = get_settings()
+            _TOKEN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            cache_file = _TOKEN_CACHE_DIR / f"{tenant}.json"
+            provider = GarminProvider(
+                api_key=key,
+                http_timeout=s.http_timeout_seconds,
+                ca_bundle=str(s.ca_bundle) if s.ca_bundle else None,
+                token_cache_file=str(cache_file),
+            )
+            _cache[tenant] = provider
+            log.info("Garmin provider created for tenant %s", tenant)
+    return provider, tenant
+
+
+def set_test_provider(tenant_id: str, provider: Provider) -> None:
+    _test_overrides[tenant_id] = provider
+
+
+def clear_test_providers() -> None:
+    _test_overrides.clear()
+
+
+async def close_all() -> None:
+    """Graceful shutdown: close all cached providers."""
+    async with _cache_lock:
+        for p in list(_cache.values()):
             try:
                 await p.close()
             except Exception as e:  # noqa: BLE001
-                log.warning("error closing provider %s: %s", p.name, e)
-        self._instances.clear()
-
-
-def _garmin_factory() -> Provider:
-    s = get_settings()
-    if not s.garmin_personal_api_key:
-        raise ProviderAuthError(
-            "GARMIN_PERSONAL_API_KEY is not set. See README for setup."
-        )
-    return GarminProvider(
-        api_key=s.garmin_personal_api_key,
-        http_timeout=s.http_timeout_seconds,
-        ca_bundle=str(s.ca_bundle) if s.ca_bundle else None,
-    )
-
-
-default_registry = ProviderRegistry()
-default_registry.register("garmin", _garmin_factory)
+                log.warning("error closing provider: %s", e)
+        _cache.clear()

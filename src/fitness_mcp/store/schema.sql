@@ -3,6 +3,7 @@ PRAGMA foreign_keys=ON;
 PRAGMA synchronous=NORMAL;
 
 CREATE TABLE IF NOT EXISTS activities (
+    tenant_id     TEXT NOT NULL,
     source        TEXT NOT NULL,
     id            TEXT NOT NULL,
     day           TEXT NOT NULL,
@@ -16,12 +17,13 @@ CREATE TABLE IF NOT EXISTS activities (
     elevation_m   REAL,
     training_load REAL,
     raw           TEXT,
-    PRIMARY KEY (source, id)
+    PRIMARY KEY (tenant_id, source, id)
 );
-CREATE INDEX IF NOT EXISTS idx_activities_day   ON activities(day);
-CREATE INDEX IF NOT EXISTS idx_activities_sport ON activities(sport);
+CREATE INDEX IF NOT EXISTS idx_activities_tenant_day ON activities(tenant_id, day);
+CREATE INDEX IF NOT EXISTS idx_activities_tenant_sport ON activities(tenant_id, sport);
 
 CREATE TABLE IF NOT EXISTS sleep (
+    tenant_id   TEXT NOT NULL,
     source      TEXT NOT NULL,
     day         TEXT NOT NULL,
     hours       REAL,
@@ -31,10 +33,11 @@ CREATE TABLE IF NOT EXISTS sleep (
     awake_min   INTEGER,
     score       INTEGER,
     raw         TEXT,
-    PRIMARY KEY (source, day)
+    PRIMARY KEY (tenant_id, source, day)
 );
 
 CREATE TABLE IF NOT EXISTS daily_wellness (
+    tenant_id         TEXT NOT NULL,
     source            TEXT NOT NULL,
     day               TEXT NOT NULL,
     steps             INTEGER,
@@ -43,23 +46,25 @@ CREATE TABLE IF NOT EXISTS daily_wellness (
     body_battery_high INTEGER,
     body_battery_low  INTEGER,
     raw               TEXT,
-    PRIMARY KEY (source, day)
+    PRIMARY KEY (tenant_id, source, day)
 );
 
 CREATE TABLE IF NOT EXISTS metrics (
-    source TEXT NOT NULL,
-    day    TEXT NOT NULL,
-    metric TEXT NOT NULL,
-    value  REAL,
-    raw    TEXT,
-    PRIMARY KEY (source, day, metric)
+    tenant_id TEXT NOT NULL,
+    source    TEXT NOT NULL,
+    day       TEXT NOT NULL,
+    metric    TEXT NOT NULL,
+    value     REAL,
+    raw       TEXT,
+    PRIMARY KEY (tenant_id, source, day, metric)
 );
-CREATE INDEX IF NOT EXISTS idx_metrics_name ON metrics(metric);
+CREATE INDEX IF NOT EXISTS idx_metrics_tenant_metric ON metrics(tenant_id, metric);
 
 CREATE TABLE IF NOT EXISTS sync_log (
+    tenant_id  TEXT NOT NULL,
     source     TEXT NOT NULL,
     kind       TEXT NOT NULL,
     day        TEXT NOT NULL,
     fetched_at TEXT NOT NULL,
-    PRIMARY KEY (source, kind, day)
+    PRIMARY KEY (tenant_id, source, kind, day)
 );

@@ -23,7 +23,10 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # Only used in stdio mode (single-user local install). HTTP mode gets the
+    # key from the per-request Authorization header instead.
     garmin_personal_api_key: str | None = Field(default=None, alias="GARMIN_PERSONAL_API_KEY")
+
     db_path: Path = Field(default=DEFAULT_DB, alias="FITNESS_MCP_DB_PATH")
     log_level: str = Field(default="INFO", alias="FITNESS_MCP_LOG_LEVEL")
     http_timeout_seconds: float = Field(default=30.0, alias="FITNESS_MCP_HTTP_TIMEOUT")
@@ -48,17 +51,9 @@ class Settings(BaseSettings):
     http_port: int = Field(default=8000, alias="FITNESS_MCP_HTTP_PORT")
     http_path: str = Field(default="/mcp", alias="FITNESS_MCP_HTTP_PATH")
 
-    # Comma-separated list of bearer tokens accepted on HTTP. If empty we
-    # refuse to bind to anything other than 127.0.0.1 — see server.py.
-    http_bearer_tokens: str = Field(default="", alias="FITNESS_MCP_HTTP_BEARER_TOKENS")
-
-    # Comma-separated list of allowed origins for CORS (claude.ai web needs this).
-    # Use "*" to allow all. Default is empty (no CORS headers emitted).
+    # Comma-separated list of allowed origins for CORS. claude.ai web / iOS
+    # needs the appropriate value here. Default is empty (no CORS headers).
     http_cors_origins: str = Field(default="", alias="FITNESS_MCP_HTTP_CORS_ORIGINS")
-
-    @property
-    def bearer_token_set(self) -> set[str]:
-        return {t.strip() for t in self.http_bearer_tokens.split(",") if t.strip()}
 
     @property
     def cors_origin_list(self) -> list[str]:

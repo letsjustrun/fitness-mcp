@@ -1,12 +1,11 @@
-"""Smoke tests for the HTTP transport wrapping.
+"""Smoke tests for the HTTP transport.
 
-We don't exercise the full MCP JSON-RPC — that belongs in an end-to-end test
-against a live client. These assertions pin down the auth gate, the health
-check, and the "refuse to bind off localhost without tokens" safety.
+The server auth model is per-request now: `Authorization: Bearer <garmin-key>`
+is both the user's identity and their Garmin credential. There is no
+server-side token allow-list.
 """
 from __future__ import annotations
 
-import pytest
 from starlette.testclient import TestClient
 
 from fitness_mcp.config import Settings
@@ -20,60 +19,48 @@ def _settings(**overrides) -> Settings:
         FITNESS_MCP_HTTP_HOST="127.0.0.1",
         FITNESS_MCP_HTTP_PORT=8000,
         FITNESS_MCP_HTTP_PATH="/mcp",
-        FITNESS_MCP_HTTP_BEARER_TOKENS="",
         FITNESS_MCP_HTTP_CORS_ORIGINS="",
     )
     base.update(overrides)
     return Settings(**{k.lower(): v for k, v in base.items()})
 
 
-def test_refuses_to_bind_off_localhost_without_tokens(tmp_db):
-    mcp = create_app()
-    s = _settings(FITNESS_MCP_HTTP_HOST="0.0.0.0")
-    with pytest.raises(RuntimeError, match="Refusing to bind"):
-        build_asgi_app(mcp, s)
-
-
 def test_healthz_is_public(tmp_db):
-    mcp = create_app()
-    s = _settings(FITNESS_MCP_HTTP_BEARER_TOKENS="sekret")
-    app = build_asgi_app(mcp, s)
+    app = build_asgi_app(create_app(), _settings())
     client = TestClient(app)
     r = client.get("/healthz")
     assert r.status_code == 200
     assert r.json() == {"status": "ok"}
 
 
-def test_mcp_path_requires_bearer_when_tokens_set(tmp_db):
-    mcp = create_app()
-    s = _settings(FITNESS_MCP_HTTP_BEARER_TOKENS="good-token")
-    app = build_asgi_app(mcp, s)
-    # Context-manager form runs Starlette lifespan events so the SDK's task
-    # group is initialized before any request is dispatched.
+def test_mcp_path_requires_bearer_header(tmp_db):
+    app = build_asgi_app(create_app(), _settings())
     with TestClient(app) as client:
         r = client.post("/mcp", json={"jsonrpc": "2.0", "method": "ping", "id": 1})
         assert r.status_code == 401
-
-        r = client.post(
-            "/mcp",
-            json={"jsonrpc": "2.0", "method": "ping", "id": 1},
-            headers={"Authorization": "Bearer nope"},
-        )
-        assert r.status_code == 403
-
-        r = client.post(
-            "/mcp",
-            json={"jsonrpc": "2.0", "method": "ping", "id": 1},
-            headers={"Authorization": "Bearer good-token"},
-        )
-        assert r.status_code not in (401, 403)
+        assert "garmin" in r.json()["error"].lower()
 
 
-def test_mcp_path_open_when_no_tokens_configured(tmp_db):
-    """With no tokens we're localhost-only; the gate must not block anything."""
-    mcp = create_app()
-    s = _settings()
-    app = build_asgi_app(mcp, s)
+def test_mcp_path_empty_bearer_rejected(tmp_db):
+    app = build_asgi_app(create_app(), _settings())
     with TestClient(app) as client:
-        r = client.post("/mcp", json={"jsonrpc": "2.0", "method": "ping", "id": 1})
+        r = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "method": "ping", "id": 1},
+            headers={"Authorization": "Bearer "},
+        )
+        assert r.status_code == 401
+
+
+def test_mcp_path_accepts_any_bearer_token_shape(tmp_db):
+    """The middleware extracts the key; validation happens at Garmin. We only
+    assert that a well-formed Bearer header makes it past the gate."""
+    app = build_asgi_app(create_app(), _settings())
+    with TestClient(app) as client:
+        r = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "method": "ping", "id": 1},
+            headers={"Authorization": "Bearer anything-nonempty"},
+        )
+        # Past the gate: whatever MCP returns is fine, just not 401/403.
         assert r.status_code not in (401, 403)

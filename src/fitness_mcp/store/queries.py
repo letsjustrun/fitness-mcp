@@ -1,8 +1,5 @@
-"""Read-side queries that back MCP tools.
-
-Keep output compact — the LLM reads this and we don't want to burn context on
-raw JSON blobs. Raw provider payloads live in the `raw` column and are only
-returned by `activity_detail()`.
+"""Read-side queries that back MCP tools. Every function is tenant-scoped —
+callers pass `tenant_id` as the first arg and the SQL filters on it.
 """
 from __future__ import annotations
 
@@ -26,14 +23,17 @@ def _parse_raw(d: dict[str, Any]) -> dict[str, Any]:
 # -------- activities -------------------------------------------------------
 
 def list_activities(
-    start: date, end: date, sport: str | None = None, source: str | None = None
+    tenant_id: str,
+    start: date, end: date,
+    sport: str | None = None,
+    source: str | None = None,
 ) -> list[dict]:
     sql = (
-        "SELECT source,id,day,sport,name,start,km,minutes,"
-        "avg_hr,max_hr,elevation_m,training_load "
-        "FROM activities WHERE day BETWEEN ? AND ?"
+        "SELECT source, id, day, sport, name, start, km, minutes, "
+        "avg_hr, max_hr, elevation_m, training_load "
+        "FROM activities WHERE tenant_id = ? AND day BETWEEN ? AND ?"
     )
-    params: list[Any] = [start.isoformat(), end.isoformat()]
+    params: list[Any] = [tenant_id, start.isoformat(), end.isoformat()]
     if sport:
         sql += " AND lower(sport) = lower(?)"
         params.append(sport)
@@ -45,9 +45,15 @@ def list_activities(
         return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
 
-def activity_detail(activity_id: str, source: str | None = None) -> dict | None:
-    sql = "SELECT * FROM activities WHERE id = ?"
-    params: list[Any] = [activity_id]
+def activity_detail(
+    tenant_id: str, activity_id: str, source: str | None = None,
+) -> dict | None:
+    sql = (
+        "SELECT source, id, day, sport, name, start, km, minutes, avg_hr, "
+        "max_hr, elevation_m, training_load, raw "
+        "FROM activities WHERE tenant_id = ? AND id = ?"
+    )
+    params: list[Any] = [tenant_id, activity_id]
     if source:
         sql += " AND source = ?"
         params.append(source)
@@ -58,12 +64,14 @@ def activity_detail(activity_id: str, source: str | None = None) -> dict | None:
 
 # -------- sleep ------------------------------------------------------------
 
-def list_sleep(start: date, end: date, source: str | None = None) -> list[dict]:
+def list_sleep(
+    tenant_id: str, start: date, end: date, source: str | None = None,
+) -> list[dict]:
     sql = (
-        "SELECT source,day,hours,deep_min,rem_min,light_min,awake_min,score "
-        "FROM sleep WHERE day BETWEEN ? AND ?"
+        "SELECT source, day, hours, deep_min, rem_min, light_min, awake_min, score "
+        "FROM sleep WHERE tenant_id = ? AND day BETWEEN ? AND ?"
     )
-    params: list[Any] = [start.isoformat(), end.isoformat()]
+    params: list[Any] = [tenant_id, start.isoformat(), end.isoformat()]
     if source:
         sql += " AND source = ?"
         params.append(source)
@@ -74,13 +82,15 @@ def list_sleep(start: date, end: date, source: str | None = None) -> list[dict]:
 
 # -------- daily wellness + merged daily summary ----------------------------
 
-def list_wellness(start: date, end: date, source: str | None = None) -> list[dict]:
+def list_wellness(
+    tenant_id: str, start: date, end: date, source: str | None = None,
+) -> list[dict]:
     sql = (
-        "SELECT source,day,steps,resting_hr,stress_avg,"
-        "body_battery_high,body_battery_low "
-        "FROM daily_wellness WHERE day BETWEEN ? AND ?"
+        "SELECT source, day, steps, resting_hr, stress_avg, "
+        "body_battery_high, body_battery_low "
+        "FROM daily_wellness WHERE tenant_id = ? AND day BETWEEN ? AND ?"
     )
-    params: list[Any] = [start.isoformat(), end.isoformat()]
+    params: list[Any] = [tenant_id, start.isoformat(), end.isoformat()]
     if source:
         sql += " AND source = ?"
         params.append(source)
@@ -89,8 +99,9 @@ def list_wellness(start: date, end: date, source: str | None = None) -> list[dic
         return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
 
-def daily_summary(start: date, end: date, source: str | None = None) -> list[dict]:
-    """Left-join wellness + sleep by (source, day) so a single row shows both."""
+def daily_summary(
+    tenant_id: str, start: date, end: date, source: str | None = None,
+) -> list[dict]:
     sql = (
         "SELECT w.source AS source, w.day AS day, "
         "       w.steps, w.resting_hr, w.stress_avg, "
@@ -98,10 +109,12 @@ def daily_summary(start: date, end: date, source: str | None = None) -> list[dic
         "       s.hours AS sleep_hours, s.score AS sleep_score, "
         "       s.deep_min, s.rem_min, s.light_min, s.awake_min "
         "FROM daily_wellness w "
-        "LEFT JOIN sleep s ON s.source = w.source AND s.day = w.day "
-        "WHERE w.day BETWEEN ? AND ?"
+        "LEFT JOIN sleep s ON s.tenant_id = w.tenant_id "
+        "                 AND s.source = w.source "
+        "                 AND s.day = w.day "
+        "WHERE w.tenant_id = ? AND w.day BETWEEN ? AND ?"
     )
-    params: list[Any] = [start.isoformat(), end.isoformat()]
+    params: list[Any] = [tenant_id, start.isoformat(), end.isoformat()]
     if source:
         sql += " AND w.source = ?"
         params.append(source)
@@ -112,7 +125,6 @@ def daily_summary(start: date, end: date, source: str | None = None) -> list[dic
 
 # -------- trends -----------------------------------------------------------
 
-#: metric name -> (table, column, aggregation)
 _METRIC_SOURCES: dict[str, tuple[str, str, str]] = {
     "resting_hr":        ("daily_wellness", "resting_hr",        "avg"),
     "steps":             ("daily_wellness", "steps",             "sum"),
@@ -125,35 +137,40 @@ _METRIC_SOURCES: dict[str, tuple[str, str, str]] = {
 }
 
 
-def known_metrics() -> list[str]:
-    """Metrics the trends tool knows about, plus ones held in the metrics table."""
+def known_metrics(tenant_id: str) -> list[str]:
     with get_db() as conn:
-        extra = [r["metric"] for r in conn.execute("SELECT DISTINCT metric FROM metrics").fetchall()]
+        extra = [
+            r["metric"]
+            for r in conn.execute(
+                "SELECT DISTINCT metric FROM metrics WHERE tenant_id = ?",
+                (tenant_id,),
+            ).fetchall()
+        ]
     return sorted(set(_METRIC_SOURCES) | set(extra))
 
 
 def trend(
-    metric: str, start: date, end: date, bucket: str, source: str | None = None
+    tenant_id: str, metric: str, start: date, end: date, bucket: str,
+    source: str | None = None,
 ) -> list[dict]:
     if bucket not in {"day", "week", "month"}:
         raise ValueError(f"bucket must be day/week/month, got {bucket!r}")
 
-    # Pull raw day-level points, then bucket + aggregate in Python so SQL
-    # stays portable and buckets line up with ISO weeks regardless of DB locale.
     if metric in _METRIC_SOURCES:
         table, col, agg = _METRIC_SOURCES[metric]
         sql = (
             f"SELECT day, {col} AS value FROM {table} "
-            f"WHERE day BETWEEN ? AND ? AND {col} IS NOT NULL"
+            f"WHERE tenant_id = ? AND day BETWEEN ? AND ? AND {col} IS NOT NULL"
         )
-        params: list[Any] = [start.isoformat(), end.isoformat()]
+        params: list[Any] = [tenant_id, start.isoformat(), end.isoformat()]
     else:
-        table, col, agg = "metrics", "value", "avg"
+        agg = "avg"
         sql = (
             "SELECT day, value FROM metrics "
-            "WHERE metric = ? AND day BETWEEN ? AND ? AND value IS NOT NULL"
+            "WHERE tenant_id = ? AND metric = ? AND day BETWEEN ? AND ? "
+            "AND value IS NOT NULL"
         )
-        params = [metric, start.isoformat(), end.isoformat()]
+        params = [tenant_id, metric, start.isoformat(), end.isoformat()]
 
     if source:
         sql += " AND source = ?"

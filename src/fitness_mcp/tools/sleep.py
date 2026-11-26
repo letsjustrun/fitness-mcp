@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..config import get_settings
-from ..providers.registry import default_registry
+from ..providers.registry import get_garmin_provider
 from ..store import queries, sync
 from ._shared import clamp_range, error_payload, parse_date
 
@@ -14,9 +14,9 @@ async def list_sleep(
         settings = get_settings()
         s, e, clamped = clamp_range(s, e, settings.max_range_days)
 
-        provider = default_registry.get(source)
-        result = await sync.sync_sleep(provider, s, e, force=force_refresh)
-        rows = queries.list_sleep(s, e, source=source)
+        provider, tenant = await get_garmin_provider()
+        result = await sync.sync_sleep(provider, tenant, s, e, force=force_refresh)
+        rows = queries.list_sleep(tenant, s, e, source=source)
         return {
             "sleep": rows,
             "range": {"start": s.isoformat(), "end": e.isoformat(), "clamped": clamped},

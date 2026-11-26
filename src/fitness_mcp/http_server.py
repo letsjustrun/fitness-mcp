@@ -1,14 +1,18 @@
 """Streamable HTTP transport.
 
-Switch from stdio to HTTP by setting:
-    FITNESS_MCP_TRANSPORT=http
-    FITNESS_MCP_HTTP_HOST=0.0.0.0           # localhost by default
-    FITNESS_MCP_HTTP_PORT=8000
-    FITNESS_MCP_HTTP_BEARER_TOKENS=t1,t2    # required to bind off localhost
-    FITNESS_MCP_HTTP_CORS_ORIGINS=https://claude.ai,https://*.anthropic.com
+Multi-tenant auth model (see auth.py):
 
-The server speaks MCP Streamable HTTP at `FITNESS_MCP_HTTP_PATH` (default `/mcp`)
-and exposes a tiny `/healthz` for liveness checks.
+- Every `/mcp` request carries `Authorization: Bearer <garmin-personal-api-key>`.
+- The user's own Garmin Personal API Token IS the auth credential.
+- The server stores NO Garmin credentials — it pulls the key out of each
+  request, uses it to talk to Garmin, and lets Garmin do the actual
+  validation. If the key is wrong, the user's Garmin fetch errors; no
+  separate server-side auth table is needed.
+- SQLite rows and the Garmin bearer-token cache are keyed by a short
+  hash of the key (tenant_id), so users never see each other's data.
+
+Switch from stdio to HTTP by setting FITNESS_MCP_TRANSPORT=http
+(or by passing `--http` on the CLI).
 """
 from __future__ import annotations
 
@@ -23,33 +27,34 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from .auth import current_garmin_key, current_tenant_id, tenant_id_from_key
 from .config import Settings
 
 log = logging.getLogger(__name__)
 
 
-class BearerAuthMiddleware:
-    """Minimal bearer-token gate.
+class GarminKeyMiddleware:
+    """Pulls the user's Garmin Personal API key out of each request's
+    Authorization header and publishes it on the auth context vars for the
+    duration of the request.
 
-    - Requests to `/healthz` pass through unauthenticated so load balancers work.
-    - OPTIONS preflight passes through so CORS can negotiate.
-    - Everything else must carry `Authorization: Bearer <t>` where `<t>` is in
-      the configured allow-list.
+    - `GET /healthz` passes through unauthenticated for load balancers.
+    - `OPTIONS` passes through so CORS preflight succeeds.
+    - Any other request to the MCP path with a missing or malformed
+      Authorization header returns 401.
     """
 
-    def __init__(self, app: ASGIApp, tokens: set[str], protected_prefix: str) -> None:
+    def __init__(self, app: ASGIApp, protected_prefix: str) -> None:
         self._app = app
-        self._tokens = tokens
         self._prefix = protected_prefix
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or not self._tokens:
+        if scope["type"] != "http":
             await self._app(scope, receive, send)
             return
 
         path: str = scope.get("path", "")
         method: str = scope.get("method", "GET")
-
         if method == "OPTIONS" or not path.startswith(self._prefix):
             await self._app(scope, receive, send)
             return
@@ -57,13 +62,22 @@ class BearerAuthMiddleware:
         headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
         auth = headers.get("authorization", "")
         if not auth.startswith("Bearer "):
-            await self._reply(send, 401, "missing bearer token")
+            await self._reply(send, 401,
+                              "Missing Authorization header. "
+                              "Send 'Authorization: Bearer <your-garmin-personal-api-key>'.")
             return
-        token = auth[len("Bearer ") :].strip()
-        if token not in self._tokens:
-            await self._reply(send, 403, "invalid bearer token")
+        key = auth[len("Bearer ") :].strip()
+        if not key:
+            await self._reply(send, 401, "Empty bearer token.")
             return
-        await self._app(scope, receive, send)
+
+        key_token = current_garmin_key.set(key)
+        tenant_token = current_tenant_id.set(tenant_id_from_key(key))
+        try:
+            await self._app(scope, receive, send)
+        finally:
+            current_garmin_key.reset(key_token)
+            current_tenant_id.reset(tenant_token)
 
     @staticmethod
     async def _reply(send: Send, status: int, msg: str) -> None:
@@ -76,38 +90,24 @@ async def _healthz(_request: Request) -> Response:
 
 
 def build_asgi_app(mcp: MCPServer, settings: Settings) -> Starlette:
-    """Attach auth + CORS + /healthz to the SDK's Streamable HTTP Starlette app.
+    """Attach the Garmin-key middleware, optional CORS, and /healthz to the
+    SDK's Streamable HTTP Starlette app.
 
-    We mutate the SDK-provided app rather than mounting it under a parent,
-    because mounted sub-apps don't receive Starlette lifespan events and the
-    MCP session manager needs its lifespan to initialize its task group.
+    We mutate the SDK-provided app rather than mounting it, because Starlette
+    does not cascade lifespan events to mounted sub-apps and the MCP session
+    manager relies on its lifespan to initialize.
     """
-    tokens = settings.bearer_token_set
-    binding_off_localhost = settings.http_host not in {"127.0.0.1", "localhost", "::1"}
-
-    if binding_off_localhost and not tokens:
-        raise RuntimeError(
-            f"Refusing to bind MCP HTTP on {settings.http_host} without "
-            f"FITNESS_MCP_HTTP_BEARER_TOKENS. Set tokens or bind to 127.0.0.1."
-        )
-
     app = mcp.streamable_http_app(
         streamable_http_path=settings.http_path,
         host=settings.http_host,
     )
 
-    # Prepend /healthz so it wins before the MCP route matcher.
+    # Prepend /healthz so it wins before the MCP matcher sees the request.
     app.router.routes.insert(0, Route("/healthz", _healthz, methods=["GET"]))
 
-    # add_middleware wraps the existing ASGI stack, so order here is reverse:
-    # the LAST add_middleware call becomes the OUTERMOST layer. We want:
-    #   client -> CORS -> BearerAuth -> MCP app
-    if tokens:
-        app.add_middleware(
-            BearerAuthMiddleware,
-            tokens=tokens,
-            protected_prefix=settings.http_path,
-        )
+    # add_middleware wraps the ASGI stack — last call becomes OUTERMOST. We
+    # want:  client -> CORS -> GarminKeyMiddleware -> MCP app
+    app.add_middleware(GarminKeyMiddleware, protected_prefix=settings.http_path)
     origins = settings.cors_origin_list
     if origins:
         app.add_middleware(
@@ -124,9 +124,9 @@ def build_asgi_app(mcp: MCPServer, settings: Settings) -> Starlette:
 def serve_http(mcp: MCPServer, settings: Settings) -> None:
     app = build_asgi_app(mcp, settings)
     log.info(
-        "fitness-mcp serving Streamable HTTP on http://%s:%d%s (auth=%s, cors=%d)",
+        "fitness-mcp serving Streamable HTTP on http://%s:%d%s "
+        "(auth=per-request Garmin key, cors=%d origins)",
         settings.http_host, settings.http_port, settings.http_path,
-        "on" if settings.bearer_token_set else "OFF",
         len(settings.cors_origin_list),
     )
     uvicorn.run(

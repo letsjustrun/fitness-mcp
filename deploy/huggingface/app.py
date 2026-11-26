@@ -1,21 +1,16 @@
 """Hugging Face Space entry point — Gradio SDK free tier.
 
-HF Spaces runs `python app.py` and routes HTTPS to whatever listens on port
-7860. We don't actually use Gradio for anything — our product is an MCP
-server. But HF's Gradio SDK expects a Gradio-shaped app, so we:
+Multi-tenant HTTP server. No server-side secrets — each user supplies their
+own Garmin Personal API key via `Authorization: Bearer <key>` in the Claude
+Connector config. See the GitHub README for the full auth model.
 
-1. Build the real Streamable HTTP MCP app (`fitness_mcp.http_server.build_asgi_app`).
-2. Mount a tiny Gradio landing at `/ui` just so the Space's UI preview shows
-   something readable instead of an empty 404.
-3. Run both under one uvicorn on 0.0.0.0:7860.
-
-Secrets (GARMIN_PERSONAL_API_KEY, FITNESS_MCP_HTTP_BEARER_TOKENS) come from
-the Space's Variables & secrets UI, injected as env vars.
+HF Gradio Spaces run `python app.py` and expect something on port 7860. We
+serve the real MCP endpoints (/mcp + /healthz) and mount a trivial Gradio
+landing at /ui so the Space's preview isn't empty.
 """
 from __future__ import annotations
 
 import os
-import sys
 
 import gradio as gr
 import uvicorn
@@ -26,42 +21,38 @@ from fitness_mcp.http_server import build_asgi_app
 from fitness_mcp.server import create_app
 
 
-def _require_bearer_tokens(settings) -> None:
-    """Safety: HF Spaces are publicly reachable. Refuse to boot without auth."""
-    if not settings.bearer_token_set:
-        print(
-            "FATAL: FITNESS_MCP_HTTP_BEARER_TOKENS is not set. Hugging Face "
-            "Spaces are reachable from the public internet; the server refuses "
-            "to boot without a bearer token configured. Add the secret in "
-            "Space Settings → Variables and secrets, then Restart the Space.",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
-
-
 def build_landing() -> gr.Blocks:
     with gr.Blocks(title="fitness-mcp", analytics_enabled=False) as demo:
         gr.Markdown(
             """
             # fitness-mcp 🏃
 
-            A Streamable HTTP **Model Context Protocol** server that gives
-            Claude read-only access to your Garmin Connect fitness data.
+            A **Streamable HTTP Model Context Protocol** server that gives
+            Claude read-only access to Garmin Connect fitness data.
+
+            ## Multi-tenant — bring your own Garmin key
+
+            This Space does not store any Garmin credentials. Every request
+            must carry **your own** Garmin Personal API Token in the
+            `Authorization` header. Your data lives in a cache row keyed by
+            the hash of your key — nobody else using this Space can read it.
 
             ## Endpoints
 
-            - `POST /mcp` — JSON-RPC over HTTP + SSE  (requires `Authorization: Bearer <token>`)
+            - `POST /mcp` — JSON-RPC over HTTP + SSE (auth required)
             - `GET /healthz` — public liveness probe
 
-            ## Use from a Claude client
+            ## Add as a Claude Connector
 
-            Add as a Custom Connector with:
+            - **URL**: `https://<this-space>.hf.space/mcp`
+            - **Authorization**: `Bearer <your-garmin-personal-api-key>`
 
-            - **URL** `https://<this-space>.hf.space/mcp`
-            - **Header** `Authorization: Bearer <your token>`
+            Get the key from Garmin Connect web → Settings → Account →
+            Personal API Token.
 
-            Full setup, config reference, and privacy notes:
-            [github.com/letsjustrun/fitness-mcp](https://github.com/letsjustrun/fitness-mcp)
+            Full setup, privacy notes, and Claude Desktop / Code instructions
+            on GitHub:
+            [github.com/letsjustrun/fitness-mcp](https://github.com/letsjustrun/fitness-mcp).
             """
         )
     return demo
@@ -69,16 +60,13 @@ def build_landing() -> gr.Blocks:
 
 def main() -> None:
     settings = get_settings()
-    _require_bearer_tokens(settings)
-
     mcp_asgi = build_asgi_app(create_app(), settings)
     landing = build_landing()
 
     outer = FastAPI()
     outer = gr.mount_gradio_app(outer, landing, path="/ui")
-    # mcp_asgi already has its own /mcp and /healthz routes. Mount at root so
-    # Starlette forwards matching paths. Gradio's /ui mount registered first
-    # takes precedence for /ui/* requests.
+    # mcp_asgi already serves /mcp and /healthz; mount at root to forward
+    # them. Gradio's /ui mount (registered first) wins for /ui/* paths.
     outer.mount("/", mcp_asgi)
 
     port = int(os.environ.get("PORT", 7860))

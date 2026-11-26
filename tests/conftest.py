@@ -1,7 +1,8 @@
 """Shared test fixtures.
 
-All tests run against an isolated SQLite file in a tmp dir, with a FakeProvider
-wired into the registry — no network calls, no real Garmin credentials.
+Each test runs against an isolated SQLite file in a tmp dir and a FakeProvider
+registered under a known tenant_id — no network calls, no real Garmin
+credentials.
 """
 from __future__ import annotations
 
@@ -11,10 +12,21 @@ from datetime import date, datetime, timedelta
 import pytest
 
 from fitness_mcp import config
+from fitness_mcp.auth import (
+    current_garmin_key,
+    current_tenant_id,
+    tenant_id_from_key,
+)
 from fitness_mcp.models import Activity, DailyWellness, MetricPoint, SleepNight
+from fitness_mcp.providers import registry
 from fitness_mcp.providers.base import Provider
-from fitness_mcp.providers.registry import default_registry
 from fitness_mcp.store import db as db_module
+
+
+#: Deterministic key used by the fake provider. Tests can derive its tenant_id
+#: via tenant_id_from_key() — exported as `FAKE_TENANT` below.
+FAKE_KEY = "test-key-not-used-for-real-garmin-calls"
+FAKE_TENANT = tenant_id_from_key(FAKE_KEY)
 
 
 class FakeProvider(Provider):
@@ -38,12 +50,9 @@ class FakeProvider(Provider):
                 sport="running",
                 name=f"Run on {cur}",
                 start=datetime.combine(cur, datetime.min.time()),
-                km=10.0,
-                minutes=55.0,
-                avg_hr=150,
-                max_hr=175,
-                elevation_m=50.0,
-                training_load=120.0,
+                km=10.0, minutes=55.0,
+                avg_hr=150, max_hr=175,
+                elevation_m=50.0, training_load=120.0,
                 raw={"stub": True},
             ))
             cur += timedelta(days=1)
@@ -94,7 +103,6 @@ class FakeProvider(Provider):
 def tmp_db(tmp_path, monkeypatch):
     db_path = tmp_path / "test.db"
     monkeypatch.setenv("FITNESS_MCP_DB_PATH", str(db_path))
-    monkeypatch.setenv("GARMIN_PERSONAL_API_KEY", "test-key-not-used")
     config.reset_settings_cache()
     db_module.reset_connection()
     yield db_path
@@ -103,7 +111,17 @@ def tmp_db(tmp_path, monkeypatch):
 
 @pytest.fixture
 def fake_provider(tmp_db):
+    """Register a FakeProvider for the FAKE_TENANT and set the context vars
+    so tools resolve it without ever instantiating the real GarminProvider.
+    """
     p = FakeProvider()
-    default_registry.override("garmin", p)
+    registry.set_test_provider(FAKE_TENANT, p)
+
+    key_token = current_garmin_key.set(FAKE_KEY)
+    tenant_token = current_tenant_id.set(FAKE_TENANT)
+
     yield p
-    default_registry._instances.pop("garmin", None)
+
+    current_garmin_key.reset(key_token)
+    current_tenant_id.reset(tenant_token)
+    registry.clear_test_providers()
