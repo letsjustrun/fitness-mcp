@@ -2,7 +2,7 @@
   "dxt_version": "0.1",
   "name": "fitness-mcp",
   "display_name": "Garmin Fitness",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Ask Claude about your Garmin fitness data: activities, sleep, HRV, VO2 max, body battery, and trends.",
   "long_description": "A Model Context Protocol server that gives Claude read-only access to your own Garmin Connect data via Garmin's official Personal API. Everything runs locally on your machine — your key, your database, your data. Bring your own Garmin Personal API Token (Settings > Account > Personal API Token in Garmin Connect web). Multi-provider architecture: Strava, Coros and others can plug in later.",
   "author": {
