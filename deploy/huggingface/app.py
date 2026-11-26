@@ -131,12 +131,24 @@ def build_landing(public_mcp_url_hint: str) -> gr.Blocks:
 
 
 def main() -> None:
-    settings = get_settings()
-    mcp_asgi = build_asgi_app(create_app(), settings)
-
     space_id = os.environ.get("SPACE_ID", "<owner>/<space>")
     owner, _, space = space_id.partition("/")
     host = f"{owner}-{space}.hf.space" if space else "<this-space>.hf.space"
+
+    # When running on HF, auto-add our Space's public domain to the MCP
+    # SDK's allowed-hosts list so its DNS-rebinding guard doesn't 421 every
+    # request. Don't touch the setting if the deployer already configured it.
+    if space and not os.environ.get("FITNESS_MCP_HTTP_ALLOWED_HOSTS"):
+        os.environ["FITNESS_MCP_HTTP_ALLOWED_HOSTS"] = ",".join([
+            host,
+            f"{host}:443",
+            "localhost",   # HF's internal probe uses localhost
+            f"localhost:{os.environ.get('PORT', '7860')}",
+            "127.0.0.1",
+        ])
+
+    settings = get_settings()
+    mcp_asgi = build_asgi_app(create_app(), settings)
     public_mcp_url = f"https://{host}{MCP_MOUNT_PATH}{settings.http_path}"
 
     landing = build_landing(public_mcp_url)
