@@ -1,0 +1,37 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# One-click deploy via https://render.com/deploy?repo=<this-repo>
+#
+# Free Web Service: HTTPS auto-provisioned, no card required, no quota.
+# Downside: free tier spins down after 15 min of inactivity. First request
+# after a nap wakes it in ~30 s; subsequent requests are instant. Fine for
+# ad-hoc iPhone / Desktop testing.
+services:
+  - type: web
+    name: fitness-mcp
+    runtime: python
+    plan: free
+    region: oregon          # us-west; feel free to change
+    pythonVersion: "3.12"
+
+    buildCommand: pip install -e .
+    startCommand: fitness-mcp --http --host 0.0.0.0 --port $PORT
+
+    # Public health probe (Render pings this to decide the service is up).
+    healthCheckPath: /healthz
+
+    # No secrets needed. Multi-tenant HTTP mode gets each user's Garmin key
+    # from the request's Authorization header; there's nothing to store.
+    envVars:
+      - key: FITNESS_MCP_LOG_LEVEL
+        value: INFO
+
+      # Render's hostname isn't fixed per-build; DNS rebinding protection
+      # would need a hostname whitelist we can't precompute. Flag it off —
+      # Render's edge already terminates TLS and the service only accepts
+      # bearer-authenticated MCP requests.
+      - key: FITNESS_MCP_HTTP_DISABLE_DNS_REBINDING
+        value: "true"
+
+      # Needed only if you'll connect from claude.ai web / iPhone.
+      - key: FITNESS_MCP_HTTP_CORS_ORIGINS
+        value: "https://claude.ai"
