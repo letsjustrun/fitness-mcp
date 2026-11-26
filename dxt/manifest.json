@@ -1,0 +1,85 @@
+{
+  "dxt_version": "0.1",
+  "name": "fitness-mcp",
+  "display_name": "Garmin Fitness",
+  "version": "0.1.0",
+  "description": "Ask Claude about your Garmin fitness data: activities, sleep, HRV, VO2 max, body battery, and trends.",
+  "long_description": "A Model Context Protocol server that gives Claude read-only access to your own Garmin Connect data via Garmin's official Personal API. Everything runs locally on your machine — your key, your database, your data. Bring your own Garmin Personal API Token (Settings > Account > Personal API Token in Garmin Connect web). Multi-provider architecture: Strava, Coros and others can plug in later.",
+  "author": {
+    "name": "Harish Singh Bisht",
+    "email": "harishsinghbisht8@gmail.com"
+  },
+  "homepage": "https://github.com/letsjustrun/fitness-mcp",
+  "documentation": "https://github.com/letsjustrun/fitness-mcp#readme",
+  "support": "https://github.com/letsjustrun/fitness-mcp/issues",
+  "license": "MIT",
+  "keywords": ["garmin", "fitness", "health", "sleep", "running", "hrv", "vo2max"],
+  "server": {
+    "type": "python",
+    "entry_point": "server.py",
+    "mcp_config": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/letsjustrun/fitness-mcp.git",
+        "fitness-mcp"
+      ],
+      "env": {
+        "GARMIN_PERSONAL_API_KEY": "${user_config.garmin_api_key}",
+        "FITNESS_MCP_CA_BUNDLE": "${user_config.ca_bundle}",
+        "FITNESS_MCP_LOG_LEVEL": "${user_config.log_level}"
+      }
+    }
+  },
+  "user_config": {
+    "garmin_api_key": {
+      "type": "string",
+      "title": "Garmin Personal API Token",
+      "description": "Generate in Garmin Connect web: Settings > Account > Personal API Token. Looks like GCDC_<uuid>.<uuid>.<base64>.<id>. Treated as a password — kept only on your machine.",
+      "sensitive": true,
+      "required": true
+    },
+    "ca_bundle": {
+      "type": "file",
+      "title": "Custom CA Bundle (optional)",
+      "description": "Only needed if your network inspects HTTPS (Zscaler, Netskope, etc.). Point this at a PEM file that contains both your system's standard roots and your corporate inspection root. See the README for the macOS recipe.",
+      "required": false
+    },
+    "log_level": {
+      "type": "string",
+      "title": "Log level",
+      "description": "DEBUG, INFO, WARNING, or ERROR. Logs go to stderr.",
+      "default": "INFO",
+      "required": false
+    }
+  },
+  "tools": [
+    {
+      "name": "get_activities",
+      "description": "List workouts between start and end (YYYY-MM-DD, inclusive)."
+    },
+    {
+      "name": "get_activity_detail",
+      "description": "Full detail for one activity: splits, HR zones, elevation profile where available."
+    },
+    {
+      "name": "get_sleep",
+      "description": "Per-night sleep in [start, end]: hours, deep/REM/light/awake minutes, score."
+    },
+    {
+      "name": "get_daily_summary",
+      "description": "One row per day combining wellness (steps, resting HR, stress, body battery) and sleep."
+    },
+    {
+      "name": "get_trends",
+      "description": "Aggregate a daily metric into day/week/month buckets (resting_hr, steps, vo2max, hrv, sleep_score, training_load, ...)."
+    }
+  ],
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": ["darwin", "linux", "win32"],
+    "runtimes": {
+      "python": ">=3.12"
+    }
+  }
+}
