@@ -24,7 +24,7 @@ _connection: sqlite3.Connection | None = None
 # Bump whenever schema.sql changes incompatibly. On mismatch we drop the
 # user's cache file and recreate from scratch — cache-aside sync re-fetches
 # on next use so this is a latency hit, not data loss.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def _open() -> sqlite3.Connection:

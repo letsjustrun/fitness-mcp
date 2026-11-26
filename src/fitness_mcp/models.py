@@ -20,6 +20,15 @@ class Activity(BaseModel):
     max_hr: int | None = None
     elevation_m: float | None = None
     training_load: float | None = None
+
+    # Running form (null when not measured — swim, bike, strength, etc.)
+    avg_cadence: int | None = None       # steps / minute
+    max_cadence: int | None = None       # steps / minute
+    avg_ground_contact_ms: int | None = None
+    avg_vertical_oscillation_cm: float | None = None
+    avg_vertical_ratio: float | None = None
+    avg_stride_length_cm: float | None = None
+
     raw: dict[str, Any] = Field(default_factory=dict)
 
 

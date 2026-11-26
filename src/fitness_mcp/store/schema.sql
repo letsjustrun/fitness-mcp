@@ -16,6 +16,13 @@ CREATE TABLE IF NOT EXISTS activities (
     max_hr        INTEGER,
     elevation_m   REAL,
     training_load REAL,
+    -- Running form (null outside running)
+    avg_cadence                INTEGER,
+    max_cadence                INTEGER,
+    avg_ground_contact_ms      INTEGER,
+    avg_vertical_oscillation_cm REAL,
+    avg_vertical_ratio         REAL,
+    avg_stride_length_cm       REAL,
     raw           TEXT,
     PRIMARY KEY (tenant_id, source, id)
 );

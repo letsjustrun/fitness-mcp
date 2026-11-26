@@ -135,6 +135,25 @@ class GarminProvider(Provider):
 
     # ----------------------------------------------------------------- fetch
 
+    # Garmin's range endpoints cap the window at 30 days. Longer ranges
+    # return a 400 'invalid range' from upstream — we chunk client-side.
+    _MAX_RANGE_DAYS = 30
+
+    async def _call_chunked(self, fn_name: str, start: date, end: date) -> list:
+        """Call `fn_name(start_date, end_date)` across 30-day windows and
+        concatenate the results. Preserves Garmin's native response order
+        within each chunk; use for any endpoint with the 30-day cap.
+        """
+        rows: list = []
+        from datetime import timedelta
+        cursor = start
+        while cursor <= end:
+            window_end = min(cursor + timedelta(days=self._MAX_RANGE_DAYS - 1), end)
+            chunk = await self._call(fn_name, cursor, window_end)
+            rows.extend(_as_list(chunk))
+            cursor = window_end + timedelta(days=1)
+        return rows
+
     async def fetch_activities(self, start: date, end: date) -> Sequence[Activity]:
         raw = await self._call(
             "search_activities",
@@ -149,12 +168,13 @@ class GarminProvider(Provider):
         return await self._call("get_activity", activity_id)
 
     async def fetch_sleep(self, start: date, end: date) -> Sequence[SleepNight]:
-        raw = await self._call("get_daily_sleep_summaries", start, end)
-        return [self._to_sleep(item) for item in _as_list(raw)]
+        # 30-day cap on the upstream endpoint — chunk long ranges.
+        raw = await self._call_chunked("get_daily_sleep_summaries", start, end)
+        return [self._to_sleep(item) for item in raw]
 
     async def fetch_daily_wellness(self, start: date, end: date) -> Sequence[DailyWellness]:
-        raw = await self._call("get_daily_summaries", start, end)
-        return [self._to_wellness(item) for item in _as_list(raw)]
+        raw = await self._call_chunked("get_daily_summaries", start, end)
+        return [self._to_wellness(item) for item in raw]
 
     async def fetch_metrics(self, start: date, end: date) -> Sequence[MetricPoint]:
         """VO2max + HRV per day. Each sub-fetch is defensive — if the user
@@ -162,8 +182,7 @@ class GarminProvider(Provider):
         """
         points: list[MetricPoint] = []
         try:
-            raw = await self._call("get_daily_vo2_max", start, end)
-            for item in _as_list(raw):
+            for item in await self._call_chunked("get_daily_vo2_max", start, end):
                 pt = self._to_vo2max(item)
                 if pt is not None:
                     points.append(pt)
@@ -171,8 +190,7 @@ class GarminProvider(Provider):
             log.warning("skipping vo2max: %s", e)
 
         try:
-            raw = await self._call("get_daily_hrv_summaries", start, end)
-            for item in _as_list(raw):
+            for item in await self._call_chunked("get_daily_hrv_summaries", start, end):
                 pt = self._to_hrv(item)
                 if pt is not None:
                     points.append(pt)
@@ -204,6 +222,14 @@ class GarminProvider(Provider):
             max_hr=_as_int(item.get("maxHR")),
             elevation_m=_as_float(item.get("elevationGain")),
             training_load=_as_float(item.get("activityTrainingLoad")),
+            # Running form metrics — present on running/trail-running activities;
+            # Garmin returns null for sports where they're not measured.
+            avg_cadence=_as_int(item.get("averageRunningCadenceInStepsPerMinute")),
+            max_cadence=_as_int(item.get("maxRunningCadenceInStepsPerMinute")),
+            avg_ground_contact_ms=_as_int(item.get("avgGroundContactTime")),
+            avg_vertical_oscillation_cm=_as_float(item.get("avgVerticalOscillation")),
+            avg_vertical_ratio=_as_float(item.get("avgVerticalRatio")),
+            avg_stride_length_cm=_as_float(item.get("avgStrideLength")),
             raw=item,
         )
 

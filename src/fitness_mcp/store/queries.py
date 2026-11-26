@@ -30,7 +30,9 @@ def list_activities(
 ) -> list[dict]:
     sql = (
         "SELECT source, id, day, sport, name, start, km, minutes, "
-        "avg_hr, max_hr, elevation_m, training_load "
+        "avg_hr, max_hr, elevation_m, training_load, "
+        "avg_cadence, max_cadence, avg_ground_contact_ms, "
+        "avg_vertical_oscillation_cm, avg_vertical_ratio, avg_stride_length_cm "
         "FROM activities WHERE tenant_id = ? AND day BETWEEN ? AND ?"
     )
     params: list[Any] = [tenant_id, start.isoformat(), end.isoformat()]
@@ -50,7 +52,10 @@ def activity_detail(
 ) -> dict | None:
     sql = (
         "SELECT source, id, day, sport, name, start, km, minutes, avg_hr, "
-        "max_hr, elevation_m, training_load, raw "
+        "max_hr, elevation_m, training_load, "
+        "avg_cadence, max_cadence, avg_ground_contact_ms, "
+        "avg_vertical_oscillation_cm, avg_vertical_ratio, avg_stride_length_cm, "
+        "raw "
         "FROM activities WHERE tenant_id = ? AND id = ?"
     )
     params: list[Any] = [tenant_id, activity_id]

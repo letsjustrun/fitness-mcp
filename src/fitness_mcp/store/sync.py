@@ -173,15 +173,26 @@ def _upsert_activities(tenant_id: str, items: Sequence[Activity]) -> None:
     with transaction() as conn:
         conn.executemany(
             """
-            INSERT INTO activities(tenant_id, source, id, day, sport, name, start,
-                                   km, minutes, avg_hr, max_hr, elevation_m,
-                                   training_load, raw)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            INSERT INTO activities(
+                tenant_id, source, id, day, sport, name, start,
+                km, minutes, avg_hr, max_hr, elevation_m, training_load,
+                avg_cadence, max_cadence, avg_ground_contact_ms,
+                avg_vertical_oscillation_cm, avg_vertical_ratio,
+                avg_stride_length_cm,
+                raw
+            )
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(tenant_id, source, id) DO UPDATE SET
                 day=excluded.day, sport=excluded.sport, name=excluded.name,
                 start=excluded.start, km=excluded.km, minutes=excluded.minutes,
                 avg_hr=excluded.avg_hr, max_hr=excluded.max_hr,
                 elevation_m=excluded.elevation_m, training_load=excluded.training_load,
+                avg_cadence=excluded.avg_cadence,
+                max_cadence=excluded.max_cadence,
+                avg_ground_contact_ms=excluded.avg_ground_contact_ms,
+                avg_vertical_oscillation_cm=excluded.avg_vertical_oscillation_cm,
+                avg_vertical_ratio=excluded.avg_vertical_ratio,
+                avg_stride_length_cm=excluded.avg_stride_length_cm,
                 raw=excluded.raw
             """,
             [
@@ -189,6 +200,9 @@ def _upsert_activities(tenant_id: str, items: Sequence[Activity]) -> None:
                     tenant_id, a.source, a.id, a.day.isoformat(), a.sport, a.name,
                     a.start.isoformat() if a.start else None,
                     a.km, a.minutes, a.avg_hr, a.max_hr, a.elevation_m, a.training_load,
+                    a.avg_cadence, a.max_cadence, a.avg_ground_contact_ms,
+                    a.avg_vertical_oscillation_cm, a.avg_vertical_ratio,
+                    a.avg_stride_length_cm,
                     json.dumps(a.raw, default=str),
                 )
                 for a in items

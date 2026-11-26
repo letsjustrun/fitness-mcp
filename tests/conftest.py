@@ -53,6 +53,11 @@ class FakeProvider(Provider):
                 km=10.0, minutes=55.0,
                 avg_hr=150, max_hr=175,
                 elevation_m=50.0, training_load=120.0,
+                avg_cadence=172, max_cadence=184,
+                avg_ground_contact_ms=250,
+                avg_vertical_oscillation_cm=8.1,
+                avg_vertical_ratio=9.2,
+                avg_stride_length_cm=120.0,
                 raw={"stub": True},
             ))
             cur += timedelta(days=1)
