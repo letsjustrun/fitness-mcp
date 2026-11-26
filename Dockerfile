@@ -30,7 +30,13 @@ RUN uv pip install --system --no-cache-dir .
 ENV FITNESS_MCP_HTTP_HOST=0.0.0.0 \
     FITNESS_MCP_HTTP_PATH=/mcp \
     FITNESS_MCP_LOG_LEVEL=INFO \
-    FITNESS_MCP_DB_PATH=/tmp/fitness_mcp/data.db
+    FITNESS_MCP_DB_PATH=/tmp/fitness_mcp/data.db \
+    # Hosts behind edge TLS (Render, Fly, HF HTTPS tunnels) don't need the
+    # MCP SDK's DNS-rebinding guard — the edge already validates the host.
+    FITNESS_MCP_HTTP_DISABLE_DNS_REBINDING=true \
+    # claude.ai web / iOS need this CORS origin to add the server as a
+    # custom connector.
+    FITNESS_MCP_HTTP_CORS_ORIGINS=https://claude.ai
 
 RUN mkdir -p /tmp/fitness_mcp
 
