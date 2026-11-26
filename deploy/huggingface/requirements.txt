@@ -1,13 +1,7 @@
-# HF Gradio SDK installs this at build time on top of its pre-installed
-# gradio (version is set by sdk_version in README front-matter). We don't
-# pin gradio here — HF owns that pin.
-#
-# Pin huggingface_hub < 0.26 because HfFolder was removed in 0.26 and
-# Gradio's bundled gradio.oauth module imports it. Without this pin the
-# container crashes at import time with:
-#   ImportError: cannot import name 'HfFolder' from 'huggingface_hub'
-huggingface_hub<0.26
-
+# HF Gradio SDK uses this at build time. We don't actually use Gradio — the
+# landing at / is a tiny inline HTML string served by FastAPI — but the SDK
+# still installs gradio[oauth] into the container. That's fine; our app just
+# ignores it.
 fastapi>=0.115
 uvicorn[standard]>=0.30
 

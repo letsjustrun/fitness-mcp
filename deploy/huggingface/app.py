@@ -1,25 +1,30 @@
-"""Hugging Face Space entry point — Gradio SDK free tier.
+"""Hugging Face Space entry point.
 
-Multi-tenant HTTP server. No server-side secrets — each user supplies their
-own Garmin Personal API key via `Authorization: Bearer <key>` on every
-request. See the GitHub README for the full auth model.
+Gradio SDK insists on having a Gradio app but every combination we tried
+(gr.mount_gradio_app, gradio.routes.App.create_app, demo.launch with
+prevent_thread_lock) hit a different Gradio/Jinja/huggingface_hub issue.
+The Space only needs *something* to listen on port 7860; HF's "is this
+Space alive" check is a TCP-level readiness probe, not a Gradio API probe.
 
-Public routes (served on port 7860):
-    /               → Gradio landing page (what HF's health probe hits)
+So we drop Gradio entirely and serve:
+
+    /               → tiny static HTML landing (keeps HF's Space preview happy)
     /api/healthz    → MCP health probe
     /api/mcp        → MCP Streamable HTTP endpoint
 
-We let `demo.launch()` own the uvicorn (HF's Gradio SDK expects exactly this
-shape — queue, websocket, /info, /config, static files — nothing we want to
-reimplement). Once it's running we mount the MCP ASGI onto `demo.app` so
-`/api/*` is served by the same uvicorn.
+Everything runs under one uvicorn on 0.0.0.0:7860.
+
+Multi-tenant: no server-side secrets. Each user sends their own Garmin
+Personal API key via `Authorization: Bearer <key>` on every request.
+See https://github.com/letsjustrun/fitness-mcp for the full auth model.
 """
 from __future__ import annotations
 
 import os
-import threading
 
-import gradio as gr
+import uvicorn
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
 
 from fitness_mcp.config import get_settings
 from fitness_mcp.http_server import build_asgi_app
@@ -28,37 +33,47 @@ from fitness_mcp.server import create_app
 MCP_MOUNT_PATH = "/api"
 
 
-def build_landing(public_mcp_url_hint: str) -> gr.Blocks:
-    with gr.Blocks(title="fitness-mcp", analytics_enabled=False) as demo:
-        gr.Markdown(
-            f"""
-            # fitness-mcp 🏃
+_LANDING_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>fitness-mcp</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+            sans-serif; max-width: 680px; margin: 3em auto; padding: 0 1em;
+            color: #222; line-height: 1.55; }}
+    h1 {{ margin-bottom: 0; }}
+    code {{ background: #f3f3f3; padding: 2px 4px; border-radius: 3px; }}
+    pre {{ background: #f3f3f3; padding: 1em; border-radius: 6px;
+            overflow-x: auto; }}
+    .muted {{ color: #777; font-size: 0.9em; }}
+  </style>
+</head>
+<body>
+  <h1>fitness-mcp 🏃</h1>
+  <p class="muted">A Streamable HTTP MCP server for Garmin Connect fitness data.</p>
 
-            A **Streamable HTTP Model Context Protocol** server that gives
-            Claude read-only access to your Garmin Connect fitness data.
+  <h2>Multi-tenant — bring your own Garmin key</h2>
+  <p>This Space stores no Garmin credentials. Every request must carry
+  <em>your own</em> Garmin Personal API Token in the <code>Authorization</code>
+  header. SQLite cache rows are keyed by the hash of your key, so nobody
+  else can read your data.</p>
 
-            ## Multi-tenant — bring your own Garmin key
+  <h2>Add as a Claude Connector</h2>
+  <pre>URL     : {public_mcp_url}
+Header  : Authorization: Bearer &lt;your-garmin-personal-api-token&gt;</pre>
+  <p>Get your key at <a href="https://connect.garmin.com">Garmin Connect</a>
+  → Settings → Account → Personal API Token.</p>
 
-            This Space stores no Garmin credentials. Every request must
-            carry *your own* Garmin Personal API Token in the Authorization
-            header. SQLite cache rows are keyed by the hash of your key.
-
-            ## Add as a Claude Connector
-
-            - **URL**: `{public_mcp_url_hint}`
-            - **Authorization**: `Bearer <your-garmin-personal-api-key>`
-
-            Get your key from Garmin Connect → Settings → Account →
-            Personal API Token.
-
-            ## Also
-
-            - `GET {MCP_MOUNT_PATH}/healthz` — public liveness probe
-            - Source + full docs on
-              [GitHub](https://github.com/letsjustrun/fitness-mcp).
-            """
-        )
-    return demo
+  <h2>Also</h2>
+  <ul>
+    <li><code>GET {mcp_path}/healthz</code> — public liveness probe</li>
+    <li>Source + full docs on
+      <a href="https://github.com/letsjustrun/fitness-mcp">GitHub</a></li>
+  </ul>
+</body>
+</html>
+"""
 
 
 def main() -> None:
@@ -70,25 +85,19 @@ def main() -> None:
     host = f"{owner}-{space}.hf.space" if space else "<this-space>.hf.space"
     public_mcp_url = f"https://{host}{MCP_MOUNT_PATH}{settings.http_path}"
 
-    landing = build_landing(public_mcp_url)
-    landing.queue()
+    app = FastAPI(docs_url=None, redoc_url=None)
+
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+    def landing() -> str:
+        return _LANDING_TEMPLATE.format(
+            public_mcp_url=public_mcp_url,
+            mcp_path=MCP_MOUNT_PATH,
+        )
+
+    app.mount(MCP_MOUNT_PATH, mcp_asgi)
 
     port = int(os.environ.get("PORT", 7860))
-    # prevent_thread_lock=True returns immediately once uvicorn is bound,
-    # so we can keep configuring landing.app before entering the forever wait.
-    landing.launch(
-        server_name="0.0.0.0",
-        server_port=port,
-        prevent_thread_lock=True,
-        inbrowser=False,
-        quiet=False,
-        show_api=False,
-    )
-    # landing.app is the FastAPI instance uvicorn is now serving. Starlette
-    # mounts are consulted per-request, so adding this after launch is fine.
-    landing.app.mount(MCP_MOUNT_PATH, mcp_asgi)
-    # Block the main thread forever so the Python process stays alive.
-    threading.Event().wait()
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level=settings.log_level.lower())
 
 
 if __name__ == "__main__":
