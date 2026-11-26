@@ -45,7 +45,7 @@ from fitness_mcp.config import get_settings
 from fitness_mcp.http_server import build_asgi_app
 from fitness_mcp.server import create_app
 
-MCP_MOUNT_PATH = "/api"
+MCP_MOUNT_PATH = "/x"
 
 
 # HF Zero GPU killswitch: the orchestrator kills Spaces that don't declare at

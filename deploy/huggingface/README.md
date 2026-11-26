@@ -23,10 +23,10 @@ This Space is **multi-tenant and stateless on auth**: each user sends their *own
 ## Endpoint
 
 ```
-https://<owner>-fitness-mcp.hf.space/api/mcp
+https://<owner>-fitness-mcp.hf.space/x/mcp
 ```
 
-Every `/api/mcp` call must send:
+Every `/x/mcp` call must send:
 
 ```
 Authorization: Bearer <your-garmin-personal-api-token>
@@ -34,7 +34,7 @@ Authorization: Bearer <your-garmin-personal-api-token>
 
 Get your token in Garmin Connect web → **Settings → Account → Personal API Token**. Looks like `GCDC_<uuid>.<uuid>.<base64>.<id>`.
 
-`GET /api/healthz` is public and returns `{"status":"ok"}`. The Space's landing (`/`) is a tiny Gradio page with the same instructions.
+`GET /x/healthz` is public and returns `{"status":"ok"}`. The Space's landing (`/`) is a tiny Gradio page with the same instructions.
 
 ## Space variables
 
@@ -48,7 +48,7 @@ Get your token in Garmin Connect web → **Settings → Account → Personal API
 
 ### iPhone / claude.ai web
 Settings → **Connectors → Add custom connector**
-- URL: `https://<owner>-fitness-mcp.hf.space/api/mcp`
+- URL: `https://<owner>-fitness-mcp.hf.space/x/mcp`
 - Header: `Authorization: Bearer <your-garmin-personal-api-token>`
 
 ### Claude Desktop (via `mcp-remote` shim)
@@ -59,7 +59,7 @@ Settings → **Connectors → Add custom connector**
       "command": "npx",
       "args": [
         "-y", "mcp-remote@latest",
-        "https://<owner>-fitness-mcp.hf.space/api/mcp",
+        "https://<owner>-fitness-mcp.hf.space/x/mcp",
         "--header", "Authorization: Bearer ${GARMIN_KEY}"
       ],
       "env": { "GARMIN_KEY": "your-garmin-personal-api-token" }
@@ -71,7 +71,7 @@ Settings → **Connectors → Add custom connector**
 ### Claude Code
 ```bash
 claude mcp add --transport http fitness \
-  "https://<owner>-fitness-mcp.hf.space/api/mcp" \
+  "https://<owner>-fitness-mcp.hf.space/x/mcp" \
   --header "Authorization: Bearer <your-garmin-personal-api-token>"
 ```
 
