@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write   # needed to create the GitHub Release + upload assets
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # for changelog generation
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Verify tag matches pyproject version
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(awk -F'"' '/^version = / {print $2; exit}' pyproject.toml)
+          DXT=$(python3 -c 'import json; print(json.load(open("dxt/manifest.json"))["version"])')
+          echo "tag=$TAG pyproject=$PKG dxt=$DXT"
+          if [ "$TAG" != "$PKG" ] || [ "$TAG" != "$DXT" ]; then
+            echo "::error::version mismatch — tag=$TAG, pyproject=$PKG, manifest=$DXT"
+            exit 1
+          fi
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Build wheel + sdist
+        run: uv build
+
+      - name: Build DXT bundle
+        run: bash scripts/build_dxt.sh
+
+      - name: List artifacts
+        run: ls -la dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: fitness-mcp v${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          files: |
+            dist/fitness_mcp-${{ steps.version.outputs.version }}-py3-none-any.whl
+            dist/fitness_mcp-${{ steps.version.outputs.version }}.tar.gz
+            dist/fitness-mcp-${{ steps.version.outputs.version }}.dxt
+          body: |
+            ## Install
+
+            ```bash
+            # One-shot via uvx (no permanent install)
+            uvx --from "git+https://github.com/letsjustrun/fitness-mcp.git@v${{ steps.version.outputs.version }}" fitness-mcp --help
+
+            # Or install into your PATH with pipx
+            pipx install "git+https://github.com/letsjustrun/fitness-mcp.git@v${{ steps.version.outputs.version }}"
+            ```
+
+            For Claude Desktop, download the `.dxt` attached to this release and double-click it. You'll be prompted for your Garmin Personal API key during install.
