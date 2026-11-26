@@ -22,12 +22,17 @@ services:
       - key: FITNESS_MCP_LOG_LEVEL
         value: INFO
 
-      # Render's hostname isn't fixed per-build; we can't precompute an
-      # allowed_hosts list. Flag the SDK's rebind protection off — the
-      # edge already terminates TLS and the service only accepts
-      # bearer-authenticated MCP requests.
+      # Flag the SDK's DNS-rebinding protection off — the edge already
+      # terminates TLS and the service only accepts bearer-authenticated
+      # MCP requests.
       - key: FITNESS_MCP_HTTP_DISABLE_DNS_REBINDING
         value: "true"
+
+      # Belt-and-suspenders: explicitly accept Render's hostname. If you
+      # rename the service, update this list too. Includes bare host and
+      # host:443 because different clients send either.
+      - key: FITNESS_MCP_HTTP_ALLOWED_HOSTS
+        value: "fitness-mcp-o50q.onrender.com,fitness-mcp-o50q.onrender.com:443"
 
       # Needed only if you'll connect from claude.ai web / iPhone.
       - key: FITNESS_MCP_HTTP_CORS_ORIGINS
