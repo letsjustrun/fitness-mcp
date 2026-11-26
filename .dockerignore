@@ -1,0 +1,38 @@
+# Keep the build context small.
+.git/
+.github/
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Build outputs
+build/
+dist/
+
+# Dev-only
+tests/
+docs/
+dxt/
+scripts/
+deploy/
+
+# Agent / editor
+CLAUDE.md
+.idea/
+.vscode/
+.DS_Store

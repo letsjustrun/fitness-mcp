@@ -8,26 +8,23 @@
 services:
   - type: web
     name: fitness-mcp
-    runtime: python
+    runtime: docker        # Dockerfile at repo root owns the build.
     plan: free
-    region: oregon          # us-west; feel free to change
-    pythonVersion: "3.12"
+    region: oregon          # us-west; change if you prefer another region.
 
-    buildCommand: pip install -e .
-    startCommand: fitness-mcp --http --host 0.0.0.0 --port $PORT
-
-    # Public health probe (Render pings this to decide the service is up).
+    # Render pings this to decide the service is up. Must be public (we
+    # expose /healthz with no auth on purpose).
     healthCheckPath: /healthz
 
-    # No secrets needed. Multi-tenant HTTP mode gets each user's Garmin key
-    # from the request's Authorization header; there's nothing to store.
+    # No secrets needed — multi-tenant HTTP mode gets each user's Garmin
+    # key from the per-request Authorization header.
     envVars:
       - key: FITNESS_MCP_LOG_LEVEL
         value: INFO
 
-      # Render's hostname isn't fixed per-build; DNS rebinding protection
-      # would need a hostname whitelist we can't precompute. Flag it off —
-      # Render's edge already terminates TLS and the service only accepts
+      # Render's hostname isn't fixed per-build; we can't precompute an
+      # allowed_hosts list. Flag the SDK's rebind protection off — the
+      # edge already terminates TLS and the service only accepts
       # bearer-authenticated MCP requests.
       - key: FITNESS_MCP_HTTP_DISABLE_DNS_REBINDING
         value: "true"
