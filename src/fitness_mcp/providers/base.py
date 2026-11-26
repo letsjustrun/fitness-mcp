@@ -15,7 +15,16 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from datetime import date
 
-from ..models import Activity, DailyWellness, MetricPoint, SleepNight
+from ..models import (
+    Activity,
+    BodyBatteryDay,
+    DailyWellness,
+    HydrationDay,
+    MetricPoint,
+    SleepNight,
+    StressDay,
+    WeightMeasurement,
+)
 
 
 class Provider(ABC):
@@ -41,6 +50,33 @@ class Provider(ABC):
     @abstractmethod
     async def fetch_metrics(self, start: date, end: date) -> Sequence[MetricPoint]:
         """VO2max, HRV, weight, etc. Normalized to one row per (day, metric)."""
+
+    # ---- new daily series ---------------------------------------------------
+    # Default no-op implementations so a provider that doesn't support one of
+    # these doesn't have to override. Returns empty.
+
+    async def fetch_body_battery(self, start: date, end: date) -> Sequence[BodyBatteryDay]:
+        return []
+
+    async def fetch_stress(self, start: date, end: date) -> Sequence[StressDay]:
+        return []
+
+    async def fetch_weight(self, start: date, end: date) -> Sequence[WeightMeasurement]:
+        return []
+
+    async def fetch_hydration(self, start: date, end: date) -> Sequence[HydrationDay]:
+        return []
+
+    # ---- single-shot, no caching -------------------------------------------
+
+    async def fetch_hrv_night(self, day: date) -> dict:
+        return {}
+
+    async def fetch_activity_workouts(self, activity_id: str) -> dict:
+        return {}
+
+    async def fetch_fitness_age(self, day: date) -> MetricPoint | None:
+        return None
 
     async def close(self) -> None:
         """Release upstream resources. Default no-op."""

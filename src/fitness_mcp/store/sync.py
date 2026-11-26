@@ -18,7 +18,16 @@ from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 
-from ..models import Activity, DailyWellness, MetricPoint, SleepNight
+from ..models import (
+    Activity,
+    BodyBatteryDay,
+    DailyWellness,
+    HydrationDay,
+    MetricPoint,
+    SleepNight,
+    StressDay,
+    WeightMeasurement,
+)
 from ..providers.base import Provider
 from .db import transaction
 
@@ -70,6 +79,42 @@ async def sync_metrics(
     return await _sync(
         provider, tenant_id, "metrics", start, end, force,
         provider.fetch_metrics, _upsert_metrics,
+    )
+
+
+async def sync_body_battery(
+    provider: Provider, tenant_id: str, start: date, end: date, *, force: bool = False,
+) -> SyncResult:
+    return await _sync(
+        provider, tenant_id, "body_battery", start, end, force,
+        provider.fetch_body_battery, _upsert_body_battery,
+    )
+
+
+async def sync_stress(
+    provider: Provider, tenant_id: str, start: date, end: date, *, force: bool = False,
+) -> SyncResult:
+    return await _sync(
+        provider, tenant_id, "stress", start, end, force,
+        provider.fetch_stress, _upsert_stress,
+    )
+
+
+async def sync_weight(
+    provider: Provider, tenant_id: str, start: date, end: date, *, force: bool = False,
+) -> SyncResult:
+    return await _sync(
+        provider, tenant_id, "weight", start, end, force,
+        provider.fetch_weight, _upsert_weight,
+    )
+
+
+async def sync_hydration(
+    provider: Provider, tenant_id: str, start: date, end: date, *, force: bool = False,
+) -> SyncResult:
+    return await _sync(
+        provider, tenant_id, "hydration", start, end, force,
+        provider.fetch_hydration, _upsert_hydration,
     )
 
 
@@ -170,31 +215,38 @@ def _write_sync_log(
 def _upsert_activities(tenant_id: str, items: Sequence[Activity]) -> None:
     if not items:
         return
+    cols = (
+        "tenant_id, source, id, day, sport, name, start, "
+        "km, minutes, avg_hr, max_hr, elevation_m, training_load, "
+        "avg_cadence, max_cadence, avg_ground_contact_ms, "
+        "avg_vertical_oscillation_cm, avg_vertical_ratio, avg_stride_length_cm, "
+        "hr_z1_sec, hr_z2_sec, hr_z3_sec, hr_z4_sec, hr_z5_sec, "
+        "aerobic_te, anaerobic_te, training_effect_label, "
+        "fastest_1k_sec, fastest_mile_sec, "
+        "avg_power, max_power, lap_count, "
+        "raw"
+    )
+    placeholders = ",".join(["?"] * 33)
+    updates = ", ".join([
+        f"{c}=excluded.{c}" for c in [
+            "day", "sport", "name", "start", "km", "minutes", "avg_hr", "max_hr",
+            "elevation_m", "training_load",
+            "avg_cadence", "max_cadence", "avg_ground_contact_ms",
+            "avg_vertical_oscillation_cm", "avg_vertical_ratio", "avg_stride_length_cm",
+            "hr_z1_sec", "hr_z2_sec", "hr_z3_sec", "hr_z4_sec", "hr_z5_sec",
+            "aerobic_te", "anaerobic_te", "training_effect_label",
+            "fastest_1k_sec", "fastest_mile_sec",
+            "avg_power", "max_power", "lap_count",
+            "raw",
+        ]
+    ])
+    sql = (
+        f"INSERT INTO activities({cols}) VALUES({placeholders}) "
+        f"ON CONFLICT(tenant_id, source, id) DO UPDATE SET {updates}"
+    )
     with transaction() as conn:
         conn.executemany(
-            """
-            INSERT INTO activities(
-                tenant_id, source, id, day, sport, name, start,
-                km, minutes, avg_hr, max_hr, elevation_m, training_load,
-                avg_cadence, max_cadence, avg_ground_contact_ms,
-                avg_vertical_oscillation_cm, avg_vertical_ratio,
-                avg_stride_length_cm,
-                raw
-            )
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(tenant_id, source, id) DO UPDATE SET
-                day=excluded.day, sport=excluded.sport, name=excluded.name,
-                start=excluded.start, km=excluded.km, minutes=excluded.minutes,
-                avg_hr=excluded.avg_hr, max_hr=excluded.max_hr,
-                elevation_m=excluded.elevation_m, training_load=excluded.training_load,
-                avg_cadence=excluded.avg_cadence,
-                max_cadence=excluded.max_cadence,
-                avg_ground_contact_ms=excluded.avg_ground_contact_ms,
-                avg_vertical_oscillation_cm=excluded.avg_vertical_oscillation_cm,
-                avg_vertical_ratio=excluded.avg_vertical_ratio,
-                avg_stride_length_cm=excluded.avg_stride_length_cm,
-                raw=excluded.raw
-            """,
+            sql,
             [
                 (
                     tenant_id, a.source, a.id, a.day.isoformat(), a.sport, a.name,
@@ -203,6 +255,10 @@ def _upsert_activities(tenant_id: str, items: Sequence[Activity]) -> None:
                     a.avg_cadence, a.max_cadence, a.avg_ground_contact_ms,
                     a.avg_vertical_oscillation_cm, a.avg_vertical_ratio,
                     a.avg_stride_length_cm,
+                    a.hr_z1_sec, a.hr_z2_sec, a.hr_z3_sec, a.hr_z4_sec, a.hr_z5_sec,
+                    a.aerobic_te, a.anaerobic_te, a.training_effect_label,
+                    a.fastest_1k_sec, a.fastest_mile_sec,
+                    a.avg_power, a.max_power, a.lap_count,
                     json.dumps(a.raw, default=str),
                 )
                 for a in items
@@ -274,6 +330,107 @@ def _upsert_metrics(tenant_id: str, items: Sequence[MetricPoint]) -> None:
                 (tenant_id, m.source, m.day.isoformat(), m.metric, m.value,
                  json.dumps(m.raw, default=str))
                 for m in items
+            ],
+        )
+
+
+def _upsert_body_battery(tenant_id: str, items: Sequence[BodyBatteryDay]) -> None:
+    if not items:
+        return
+    with transaction() as conn:
+        conn.executemany(
+            """
+            INSERT INTO body_battery(tenant_id, source, day,
+                                     min_value, max_value, charged, drained, latest, raw)
+            VALUES(?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(tenant_id, source, day) DO UPDATE SET
+                min_value=excluded.min_value, max_value=excluded.max_value,
+                charged=excluded.charged, drained=excluded.drained,
+                latest=excluded.latest, raw=excluded.raw
+            """,
+            [
+                (tenant_id, b.source, b.day.isoformat(),
+                 b.min_value, b.max_value, b.charged, b.drained, b.latest,
+                 json.dumps(b.raw, default=str))
+                for b in items
+            ],
+        )
+
+
+def _upsert_stress(tenant_id: str, items: Sequence[StressDay]) -> None:
+    if not items:
+        return
+    with transaction() as conn:
+        conn.executemany(
+            """
+            INSERT INTO stress(tenant_id, source, day,
+                               avg_level, max_level,
+                               rest_sec, activity_sec,
+                               low_sec, medium_sec, high_sec, raw)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(tenant_id, source, day) DO UPDATE SET
+                avg_level=excluded.avg_level, max_level=excluded.max_level,
+                rest_sec=excluded.rest_sec, activity_sec=excluded.activity_sec,
+                low_sec=excluded.low_sec, medium_sec=excluded.medium_sec,
+                high_sec=excluded.high_sec, raw=excluded.raw
+            """,
+            [
+                (tenant_id, s.source, s.day.isoformat(),
+                 s.avg_level, s.max_level,
+                 s.rest_sec, s.activity_sec,
+                 s.low_sec, s.medium_sec, s.high_sec,
+                 json.dumps(s.raw, default=str))
+                for s in items
+            ],
+        )
+
+
+def _upsert_weight(tenant_id: str, items: Sequence[WeightMeasurement]) -> None:
+    if not items:
+        return
+    with transaction() as conn:
+        conn.executemany(
+            """
+            INSERT INTO weight(tenant_id, source, day, taken_at,
+                               weight_kg, bmi, body_fat_pct,
+                               muscle_mass_kg, bone_mass_kg, body_water_pct, raw)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(tenant_id, source, day) DO UPDATE SET
+                taken_at=excluded.taken_at,
+                weight_kg=excluded.weight_kg, bmi=excluded.bmi,
+                body_fat_pct=excluded.body_fat_pct,
+                muscle_mass_kg=excluded.muscle_mass_kg,
+                bone_mass_kg=excluded.bone_mass_kg,
+                body_water_pct=excluded.body_water_pct,
+                raw=excluded.raw
+            """,
+            [
+                (tenant_id, w.source, w.day.isoformat(),
+                 w.taken_at.isoformat() if w.taken_at else None,
+                 w.weight_kg, w.bmi, w.body_fat_pct,
+                 w.muscle_mass_kg, w.bone_mass_kg, w.body_water_pct,
+                 json.dumps(w.raw, default=str))
+                for w in items
+            ],
+        )
+
+
+def _upsert_hydration(tenant_id: str, items: Sequence[HydrationDay]) -> None:
+    if not items:
+        return
+    with transaction() as conn:
+        conn.executemany(
+            """
+            INSERT INTO hydration(tenant_id, source, day, consumed_ml, goal_ml, raw)
+            VALUES(?,?,?,?,?,?)
+            ON CONFLICT(tenant_id, source, day) DO UPDATE SET
+                consumed_ml=excluded.consumed_ml, goal_ml=excluded.goal_ml,
+                raw=excluded.raw
+            """,
+            [
+                (tenant_id, h.source, h.day.isoformat(),
+                 h.consumed_ml, h.goal_ml, json.dumps(h.raw, default=str))
+                for h in items
             ],
         )
 

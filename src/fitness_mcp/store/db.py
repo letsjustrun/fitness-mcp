@@ -24,7 +24,7 @@ _connection: sqlite3.Connection | None = None
 # Bump whenever schema.sql changes incompatibly. On mismatch we drop the
 # user's cache file and recreate from scratch — cache-aside sync re-fetches
 # on next use so this is a latency hit, not data loss.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def _open() -> sqlite3.Connection:
@@ -71,10 +71,11 @@ def _maybe_reset_on_schema_change(db_path: Path) -> None:
             return
         version = probe.execute("SELECT version FROM _schema LIMIT 1").fetchone()
         probe.close()
-        if version is None or version["version"] != SCHEMA_VERSION:
+        current_version = version["version"] if version is not None else None
+        if current_version != SCHEMA_VERSION:
             log.warning(
                 "sqlite schema v%s != expected v%s — resetting cache at %s",
-                (version or {}).get("version"), SCHEMA_VERSION, db_path,
+                current_version, SCHEMA_VERSION, db_path,
             )
             db_path.unlink()
             for suffix in ("-wal", "-shm"):

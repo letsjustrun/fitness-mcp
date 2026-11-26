@@ -17,7 +17,16 @@ from fitness_mcp.auth import (
     current_tenant_id,
     tenant_id_from_key,
 )
-from fitness_mcp.models import Activity, DailyWellness, MetricPoint, SleepNight
+from fitness_mcp.models import (
+    Activity,
+    BodyBatteryDay,
+    DailyWellness,
+    HydrationDay,
+    MetricPoint,
+    SleepNight,
+    StressDay,
+    WeightMeasurement,
+)
 from fitness_mcp.providers import registry
 from fitness_mcp.providers.base import Provider
 from fitness_mcp.store import db as db_module
@@ -102,6 +111,58 @@ class FakeProvider(Provider):
             out.append(MetricPoint(source=self.name, day=cur, metric="hrv", value=55.0))
             cur += timedelta(days=1)
         return out
+
+    async def fetch_body_battery(self, start, end):
+        out: list[BodyBatteryDay] = []
+        cur = start
+        while cur <= end:
+            out.append(BodyBatteryDay(source=self.name, day=cur,
+                                       min_value=20, max_value=85,
+                                       charged=60, drained=55, latest=25))
+            cur += timedelta(days=1)
+        return out
+
+    async def fetch_stress(self, start, end):
+        out: list[StressDay] = []
+        cur = start
+        while cur <= end:
+            out.append(StressDay(source=self.name, day=cur,
+                                 avg_level=25, max_level=70,
+                                 rest_sec=60_000, activity_sec=40_000,
+                                 low_sec=20_000, medium_sec=10_000, high_sec=1_000))
+            cur += timedelta(days=1)
+        return out
+
+    async def fetch_weight(self, start, end):
+        out: list[WeightMeasurement] = []
+        cur = start
+        while cur <= end:
+            out.append(WeightMeasurement(
+                source=self.name, day=cur,
+                taken_at=datetime.combine(cur, datetime.min.time()),
+                weight_kg=72.5, bmi=22.0, body_fat_pct=15.0,
+                muscle_mass_kg=34.0, bone_mass_kg=3.2, body_water_pct=60.0,
+            ))
+            cur += timedelta(days=1)
+        return out
+
+    async def fetch_hydration(self, start, end):
+        out: list[HydrationDay] = []
+        cur = start
+        while cur <= end:
+            out.append(HydrationDay(source=self.name, day=cur,
+                                     consumed_ml=2200, goal_ml=2500))
+            cur += timedelta(days=1)
+        return out
+
+    async def fetch_hrv_night(self, day):
+        return {"calendarDate": day.isoformat(), "lastNightAvg": 95, "stub": True}
+
+    async def fetch_activity_workouts(self, activity_id):
+        return {"activityId": activity_id, "workouts": [], "stub": True}
+
+    async def fetch_fitness_age(self, day):
+        return MetricPoint(source=self.name, day=day, metric="fitness_age", value=35.0)
 
 
 @pytest.fixture

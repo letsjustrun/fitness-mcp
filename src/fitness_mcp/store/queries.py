@@ -203,6 +203,64 @@ def trend(
     return out
 
 
+def list_body_battery(tenant_id: str, start: date, end: date,
+                      source: str | None = None) -> list[dict]:
+    sql = (
+        "SELECT source, day, min_value, max_value, charged, drained, latest "
+        "FROM body_battery WHERE tenant_id = ? AND day BETWEEN ? AND ?"
+    )
+    params: list[Any] = [tenant_id, start.isoformat(), end.isoformat()]
+    if source:
+        sql += " AND source = ?"; params.append(source)
+    sql += " ORDER BY day DESC"
+    with get_db() as conn:
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def list_stress(tenant_id: str, start: date, end: date,
+                source: str | None = None) -> list[dict]:
+    sql = (
+        "SELECT source, day, avg_level, max_level, "
+        "rest_sec, activity_sec, low_sec, medium_sec, high_sec "
+        "FROM stress WHERE tenant_id = ? AND day BETWEEN ? AND ?"
+    )
+    params: list[Any] = [tenant_id, start.isoformat(), end.isoformat()]
+    if source:
+        sql += " AND source = ?"; params.append(source)
+    sql += " ORDER BY day DESC"
+    with get_db() as conn:
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def list_weight(tenant_id: str, start: date, end: date,
+                source: str | None = None) -> list[dict]:
+    sql = (
+        "SELECT source, day, taken_at, weight_kg, bmi, body_fat_pct, "
+        "muscle_mass_kg, bone_mass_kg, body_water_pct "
+        "FROM weight WHERE tenant_id = ? AND day BETWEEN ? AND ?"
+    )
+    params: list[Any] = [tenant_id, start.isoformat(), end.isoformat()]
+    if source:
+        sql += " AND source = ?"; params.append(source)
+    sql += " ORDER BY day DESC"
+    with get_db() as conn:
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def list_hydration(tenant_id: str, start: date, end: date,
+                   source: str | None = None) -> list[dict]:
+    sql = (
+        "SELECT source, day, consumed_ml, goal_ml "
+        "FROM hydration WHERE tenant_id = ? AND day BETWEEN ? AND ?"
+    )
+    params: list[Any] = [tenant_id, start.isoformat(), end.isoformat()]
+    if source:
+        sql += " AND source = ?"; params.append(source)
+    sql += " ORDER BY day DESC"
+    with get_db() as conn:
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
 def _bucket_key(d: date, bucket: str) -> str:
     if bucket == "day":
         return d.isoformat()

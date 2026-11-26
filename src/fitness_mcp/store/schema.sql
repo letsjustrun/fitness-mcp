@@ -23,6 +23,23 @@ CREATE TABLE IF NOT EXISTS activities (
     avg_vertical_oscillation_cm REAL,
     avg_vertical_ratio         REAL,
     avg_stride_length_cm       REAL,
+    -- HR zone breakdown (seconds)
+    hr_z1_sec     INTEGER,
+    hr_z2_sec     INTEGER,
+    hr_z3_sec     INTEGER,
+    hr_z4_sec     INTEGER,
+    hr_z5_sec     INTEGER,
+    -- Training effect
+    aerobic_te             REAL,
+    anaerobic_te           REAL,
+    training_effect_label  TEXT,
+    -- Fastest splits during the workout
+    fastest_1k_sec   REAL,
+    fastest_mile_sec REAL,
+    -- Power + laps
+    avg_power     INTEGER,
+    max_power     INTEGER,
+    lap_count     INTEGER,
     raw           TEXT,
     PRIMARY KEY (tenant_id, source, id)
 );
@@ -74,4 +91,57 @@ CREATE TABLE IF NOT EXISTS sync_log (
     day        TEXT NOT NULL,
     fetched_at TEXT NOT NULL,
     PRIMARY KEY (tenant_id, source, kind, day)
+);
+
+CREATE TABLE IF NOT EXISTS body_battery (
+    tenant_id   TEXT NOT NULL,
+    source      TEXT NOT NULL,
+    day         TEXT NOT NULL,
+    min_value   INTEGER,
+    max_value   INTEGER,
+    charged     INTEGER,
+    drained     INTEGER,
+    latest      INTEGER,
+    raw         TEXT,
+    PRIMARY KEY (tenant_id, source, day)
+);
+
+CREATE TABLE IF NOT EXISTS stress (
+    tenant_id    TEXT NOT NULL,
+    source       TEXT NOT NULL,
+    day          TEXT NOT NULL,
+    avg_level    INTEGER,
+    max_level    INTEGER,
+    rest_sec     INTEGER,
+    activity_sec INTEGER,
+    low_sec      INTEGER,
+    medium_sec   INTEGER,
+    high_sec     INTEGER,
+    raw          TEXT,
+    PRIMARY KEY (tenant_id, source, day)
+);
+
+CREATE TABLE IF NOT EXISTS weight (
+    tenant_id       TEXT NOT NULL,
+    source          TEXT NOT NULL,
+    day             TEXT NOT NULL,
+    taken_at        TEXT,
+    weight_kg       REAL,
+    bmi             REAL,
+    body_fat_pct    REAL,
+    muscle_mass_kg  REAL,
+    bone_mass_kg    REAL,
+    body_water_pct  REAL,
+    raw             TEXT,
+    PRIMARY KEY (tenant_id, source, day)
+);
+
+CREATE TABLE IF NOT EXISTS hydration (
+    tenant_id   TEXT NOT NULL,
+    source      TEXT NOT NULL,
+    day         TEXT NOT NULL,
+    consumed_ml INTEGER,
+    goal_ml     INTEGER,
+    raw         TEXT,
+    PRIMARY KEY (tenant_id, source, day)
 );

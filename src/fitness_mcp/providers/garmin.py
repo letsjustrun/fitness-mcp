@@ -33,7 +33,16 @@ from garmin_personal_api import (
 )
 
 from ..errors import ProviderAuthError, ProviderFetchError
-from ..models import Activity, DailyWellness, MetricPoint, SleepNight
+from ..models import (
+    Activity,
+    BodyBatteryDay,
+    DailyWellness,
+    HydrationDay,
+    MetricPoint,
+    SleepNight,
+    StressDay,
+    WeightMeasurement,
+)
 from .base import Provider
 
 log = logging.getLogger(__name__)
@@ -199,6 +208,52 @@ class GarminProvider(Provider):
 
         return points
 
+    # ------------------------ additional daily series ----------------------
+
+    async def fetch_body_battery(self, start: date, end: date) -> Sequence[BodyBatteryDay]:
+        raw = await self._call_chunked("get_daily_body_battery", start, end)
+        return [self._to_body_battery(item) for item in raw if item]
+
+    async def fetch_stress(self, start: date, end: date) -> Sequence[StressDay]:
+        raw = await self._call_chunked("get_daily_stress", start, end)
+        return [self._to_stress(item) for item in raw if item]
+
+    async def fetch_weight(self, start: date, end: date) -> Sequence[WeightMeasurement]:
+        raw = await self._call_chunked("get_weight_measurements", start, end)
+        out: list[WeightMeasurement] = []
+        for item in raw:
+            w = self._to_weight(item)
+            if w is not None:
+                out.append(w)
+        return out
+
+    async def fetch_hydration(self, start: date, end: date) -> Sequence[HydrationDay]:
+        raw = await self._call_chunked("get_daily_hydration", start, end)
+        return [self._to_hydration(item) for item in raw if item]
+
+    async def fetch_hrv_night(self, day: date) -> dict:
+        return await self._call("get_daily_hrv", day) or {}
+
+    async def fetch_activity_workouts(self, activity_id: str) -> dict:
+        return await self._call("get_activity_workouts", activity_id) or {}
+
+    async def fetch_fitness_age(self, day: date) -> MetricPoint | None:
+        raw = await self._call("get_fitness_age", day)
+        if not isinstance(raw, dict):
+            return None
+        value = (
+            raw.get("chronologicalAge")  # some responses expose age-related fields
+            or raw.get("fitnessAge")
+            or raw.get("value")
+        )
+        return MetricPoint(
+            source=self.name,
+            day=day,
+            metric="fitness_age",
+            value=_as_float(value),
+            raw=raw,
+        )
+
     # -------------------------------------------------------------- normalize
 
     def _to_activity(self, item: dict) -> Activity:
@@ -230,6 +285,23 @@ class GarminProvider(Provider):
             avg_vertical_oscillation_cm=_as_float(item.get("avgVerticalOscillation")),
             avg_vertical_ratio=_as_float(item.get("avgVerticalRatio")),
             avg_stride_length_cm=_as_float(item.get("avgStrideLength")),
+            # HR zone time (seconds)
+            hr_z1_sec=_as_int(item.get("hrTimeInZone_1")),
+            hr_z2_sec=_as_int(item.get("hrTimeInZone_2")),
+            hr_z3_sec=_as_int(item.get("hrTimeInZone_3")),
+            hr_z4_sec=_as_int(item.get("hrTimeInZone_4")),
+            hr_z5_sec=_as_int(item.get("hrTimeInZone_5")),
+            # Training effect
+            aerobic_te=_as_float(item.get("aerobicTrainingEffect")),
+            anaerobic_te=_as_float(item.get("anaerobicTrainingEffect")),
+            training_effect_label=item.get("trainingEffectLabel"),
+            # Fastest splits
+            fastest_1k_sec=_as_float(item.get("fastestSplit_1000")),
+            fastest_mile_sec=_as_float(item.get("fastestSplit_1609")),
+            # Power + laps
+            avg_power=_as_int(item.get("avgPower")),
+            max_power=_as_int(item.get("maxPower")),
+            lap_count=_as_int(item.get("lapCount")),
             raw=item,
         )
 
@@ -280,6 +352,74 @@ class GarminProvider(Provider):
                     raw=item,
                 )
         return None
+
+    def _to_body_battery(self, item: dict) -> BodyBatteryDay:
+        # Reuse the same field names we've already seen on daily wellness.
+        return BodyBatteryDay(
+            source=self.name,
+            day=_parse_date(item.get("calendarDate")) or _today(),
+            min_value=_as_int(item.get("minValue") or _dig(item, "bodyBattery", "minValue")),
+            max_value=_as_int(item.get("maxValue") or _dig(item, "bodyBattery", "maxValue")),
+            charged=_as_int(item.get("chargedValue") or _dig(item, "bodyBattery", "chargedValue")),
+            drained=_as_int(item.get("drainedValue") or _dig(item, "bodyBattery", "drainedValue")),
+            latest=_as_int(item.get("latestValue") or _dig(item, "bodyBattery", "latestValue")),
+            raw=item,
+        )
+
+    def _to_stress(self, item: dict) -> StressDay:
+        return StressDay(
+            source=self.name,
+            day=_parse_date(item.get("calendarDate")) or _today(),
+            avg_level=_as_int(item.get("avgStressLevel") or _dig(item, "stress", "avgLevel")),
+            max_level=_as_int(item.get("maxStressLevel") or _dig(item, "stress", "maxLevel")),
+            rest_sec=_ms_to_sec(item.get("restStressDurationInMillis")
+                                or _dig(item, "stress", "restDurationInMillis")),
+            activity_sec=_ms_to_sec(item.get("activityStressDurationInMillis")
+                                    or _dig(item, "stress", "activityDurationInMillis")),
+            low_sec=_ms_to_sec(item.get("lowStressDurationInMillis")
+                               or _dig(item, "stress", "lowStressDurationInMillis")),
+            medium_sec=_ms_to_sec(item.get("mediumStressDurationInMillis")
+                                  or _dig(item, "stress", "mediumStressDurationInMillis")),
+            high_sec=_ms_to_sec(item.get("highStressDurationInMillis")
+                                or _dig(item, "stress", "highStressDurationInMillis")),
+            raw=item,
+        )
+
+    def _to_weight(self, item: dict) -> WeightMeasurement | None:
+        # Weight entries come stamped with a timestamp, not a calendar date.
+        ts = item.get("date") or item.get("timestampGMT") or item.get("samplePk")
+        taken = _parse_dt(ts) if isinstance(ts, str) else None
+        if taken is None and isinstance(ts, (int, float)):
+            # Milliseconds epoch
+            from datetime import UTC
+            taken = datetime.fromtimestamp(float(ts) / 1000.0, tz=UTC)
+        if taken is None:
+            return None
+        grams = item.get("weight")
+        kg = round(float(grams) / 1000.0, 2) if isinstance(grams, (int, float)) else None
+        return WeightMeasurement(
+            source=self.name,
+            day=taken.date(),
+            taken_at=taken,
+            weight_kg=kg,
+            bmi=_as_float(item.get("bmi")),
+            body_fat_pct=_as_float(item.get("bodyFat")),
+            muscle_mass_kg=round(float(item["muscleMass"]) / 1000.0, 2)
+                            if isinstance(item.get("muscleMass"), (int, float)) else None,
+            bone_mass_kg=round(float(item["boneMass"]) / 1000.0, 2)
+                          if isinstance(item.get("boneMass"), (int, float)) else None,
+            body_water_pct=_as_float(item.get("bodyWater")),
+            raw=item,
+        )
+
+    def _to_hydration(self, item: dict) -> HydrationDay:
+        return HydrationDay(
+            source=self.name,
+            day=_parse_date(item.get("calendarDate")) or _today(),
+            consumed_ml=_as_int(item.get("valueInML") or item.get("consumed")),
+            goal_ml=_as_int(item.get("goalInML") or item.get("goal")),
+            raw=item,
+        )
 
     def _to_hrv(self, item: dict) -> MetricPoint | None:
         # Shape: {calendarDate, lastNightAvg, weeklyAvg, ...}
@@ -404,6 +544,11 @@ def _seconds_to_hours(v: Any) -> float | None:
 def _seconds_to_min(v: Any) -> int | None:
     f = _as_float(v)
     return int(round(f / 60.0)) if f is not None else None
+
+
+def _ms_to_sec(v: Any) -> int | None:
+    f = _as_float(v)
+    return int(round(f / 1000.0)) if f is not None else None
 
 
 def _today() -> date:
