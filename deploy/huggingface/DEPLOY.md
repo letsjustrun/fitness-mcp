@@ -1,71 +1,64 @@
-# Deploy fitness-mcp to Hugging Face Spaces
+# Deploy fitness-mcp to Hugging Face Spaces (free tier)
 
-~15 minutes end-to-end. No credit card, no cost on the free CPU tier.
+Gradio SDK, free CPU basic hardware. ~10 min end-to-end. No credit card.
+
+> Docker SDK is paywalled on HF's free tier as of Nov 2026. We work around that by using Gradio SDK as a thin wrapper — our `app.py` serves the real MCP server on port 7860 and adds a trivial Gradio landing page at `/ui` so the Space preview shows something.
 
 ---
 
 ## 1. Create the Space
 
-1. Sign in at https://huggingface.co/ (free account).
-2. Top-right **+** menu → **New Space**.
+1. Sign in to https://huggingface.co/.
+2. Top-right **+** → **New Space**.
 3. Fill in:
    - **Owner**: your HF username
    - **Space name**: `fitness-mcp`
    - **License**: MIT
-   - **SDK**: **Docker** → pick **Blank** (we ship our own Dockerfile)
+   - **SDK**: **Gradio** → pick **Blank**
    - **Hardware**: **CPU basic — free**
-   - **Visibility**: **Public** *(the bearer token protects the data; private Spaces require HF Pro)*
+   - **Visibility**: **Public** *(bearer token protects the data; private Spaces require HF Pro)*
 4. Click **Create Space**.
-5. Note the Space's git URL — it'll look like `https://huggingface.co/spaces/<you>/fitness-mcp`.
 
 ---
 
-## 2. Get an HF access token (for `git push` auth)
+## 2. Get an HF write token (for `git push`)
 
 1. https://huggingface.co/settings/tokens
-2. **Create new token** → type: **Write**, name: `fitness-mcp deploy`.
-3. Copy the `hf_...` token.
+2. **Create new token** → type **Write** → name `fitness-mcp deploy` → copy `hf_...`.
 
 ---
 
-## 3. Push the code
+## 3. Push the three files
 
-From your checkout of **this** repo (adjust paths if yours is elsewhere):
+The Space only needs three files — `app.py`, `requirements.txt`, and the HF-flavored `README.md`. The rest of the code (fitness_mcp package) is pulled from GitHub at build time via `requirements.txt`.
 
 ```bash
 HF_USER=<your-hf-username>
 SRC=/Users/harishsinghbisht/paytm/GarminMCP
 
-# Clone the empty Space's git repo
+# Clone the Space's git
 git clone "https://huggingface.co/spaces/$HF_USER/fitness-mcp" /tmp/hf-fitness-mcp
 cd /tmp/hf-fitness-mcp
 
-# Sync our project in. We exclude .git, venv, caches, tests, dxt — the Space
-# only needs the runtime image, not the dev harness.
-rsync -a --delete \
-  --exclude='.git/' --exclude='.venv/' --exclude='dist/' \
-  --exclude='tests/' --exclude='docs/' --exclude='.github/' \
-  --exclude='dxt/' --exclude='CLAUDE.md' --exclude='.env' --exclude='.env.*' \
-  --exclude='README.md' \
-  "$SRC/" ./
-
-# Use the HF-flavored README (has the required front-matter)
-cp "$SRC/deploy/huggingface/README.md" ./README.md
+# Copy only the three HF-specific files
+cp "$SRC/deploy/huggingface/app.py"           ./app.py
+cp "$SRC/deploy/huggingface/requirements.txt" ./requirements.txt
+cp "$SRC/deploy/huggingface/README.md"        ./README.md
 
 git add -A
 git commit -m "Deploy fitness-mcp 0.1.0"
 git push
 # Username: your HF username
-# Password: the hf_... token from step 2
+# Password: the hf_... write token from step 2
 ```
 
-The Space UI (https://huggingface.co/spaces/<you>/fitness-mcp) will show **Building…**. Builds take 2–4 minutes on the free tier.
+Space UI (https://huggingface.co/spaces/<you>/fitness-mcp) will show **Building…** for 2–4 minutes.
 
 ---
 
 ## 4. Set secrets
 
-While it builds: in the Space UI → **Settings** → **Variables and secrets**:
+While it builds: Space UI → **Settings → Variables and secrets**.
 
 | Name | Kind | Value |
 |---|---|---|
@@ -73,7 +66,7 @@ While it builds: in the Space UI → **Settings** → **Variables and secrets**:
 | `FITNESS_MCP_HTTP_BEARER_TOKENS` | **Secret** | `python -c 'import secrets; print(secrets.token_urlsafe(32))'` |
 | `FITNESS_MCP_HTTP_CORS_ORIGINS` | **Variable** | `https://claude.ai` (only if you'll connect from claude.ai web / iPhone) |
 
-Click **Restart** after setting secrets so the new values take effect.
+Click **Restart Space** so the new secrets load. The server refuses to boot without `FITNESS_MCP_HTTP_BEARER_TOKENS` set — if you see "FATAL" in Space logs, this is why.
 
 ---
 
@@ -84,9 +77,7 @@ Click **Restart** after setting secrets so the new values take effect.
 curl -s https://<you>-fitness-mcp.hf.space/healthz
 # -> {"status":"ok"}
 
-# Auth sanity check
-curl -s -o /dev/null -w "%{http_code}\n" -X POST \
-  https://<you>-fitness-mcp.hf.space/mcp
+curl -s -o /dev/null -w "%{http_code}\n" -X POST https://<you>-fitness-mcp.hf.space/mcp
 # -> 401
 
 curl -s -o /dev/null -w "%{http_code}\n" -X POST \
@@ -98,7 +89,7 @@ curl -s -o /dev/null -w "%{http_code}\n" -X POST \
 # -> 200
 ```
 
-If both match, you're live.
+The `/ui` page in the Space preview should also render a short markdown landing.
 
 ---
 
@@ -112,11 +103,9 @@ If both match, you're live.
 4. Open a new chat, ask about your Garmin data.
 
 ### Claude Desktop (via `mcp-remote` shim)
-
-See the HF Space README (deploy/huggingface/README.md).
+See the HF Space README.
 
 ### Claude Code
-
 ```bash
 claude mcp add --transport http fitness \
   "https://<you>-fitness-mcp.hf.space/mcp" \
@@ -129,18 +118,23 @@ claude mcp add --transport http fitness \
 
 Repeat step 3 whenever you want to redeploy. HF rebuilds on every push.
 
+Because `requirements.txt` pins `fitness-mcp @ git+https://github.com/letsjustrun/fitness-mcp.git@main`, every HF build pulls the latest `main`. For a frozen version, change `@main` to `@v0.1.0` (once you've tagged a release).
+
+---
+
 ## Pausing / stopping
 
-- Spaces pause themselves after 48h of no requests. First request after a nap wakes it in ~15s.
-- To pause manually: Space UI → Settings → **Pause Space** (stops billing-like counters even though it's free).
-- To delete: Settings → **Delete Space**.
+- Free tier Spaces pause themselves after 48h of no requests. First request after a nap wakes it in ~15s.
+- Pause manually: Space UI → Settings → **Pause Space**.
+- Delete: Settings → **Delete Space**.
 
 ## Known limitations of the free tier
 
-- Ephemeral filesystem — cached Garmin data is wiped on redeploy / nap wake.
-  Cache-aside re-syncs on the next tool call, so this is a latency hit, not a correctness problem.
-- No custom domain — you get `*.hf.space`.
-- One container instance; no horizontal scaling.
-- Request logs retention is limited.
+- Ephemeral filesystem — cached Garmin data is wiped on redeploy / nap wake. Cache-aside re-syncs on the next tool call, so this is a latency hit, not a correctness problem.
+- 16 GB RAM, 2 vCPU — plenty for this workload.
+- No custom domain — `*.hf.space` only.
+- One container; no horizontal scaling.
 
-For long-term hosting, graduate to Fly.io / Render / a tiny VM once the POC proves itself.
+## If you upgrade to HF Pro and want Docker SDK
+
+`deploy/huggingface/Dockerfile.alt` + `deploy/huggingface/.dockerignore.alt` are the Docker-SDK equivalent. Rename them to `Dockerfile` / `.dockerignore`, change `sdk: gradio` → `sdk: docker` in the Space's README front-matter, drop `app.py` and `requirements.txt`, and push.
