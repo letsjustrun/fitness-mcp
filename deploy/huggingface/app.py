@@ -4,24 +4,22 @@ Multi-tenant HTTP server. No server-side secrets — each user supplies their
 own Garmin Personal API key via `Authorization: Bearer <key>` on every
 request. See the GitHub README for the full auth model.
 
-HF's Gradio SDK probes port 7860 with Gradio-shaped requests and recycles
-containers that don't answer them. To satisfy both HF and our MCP transport
-we let Gradio build its own FastAPI (including `/`, `/info`, `/config`,
-`/api/predict`, websocket, …), then mount the MCP Starlette app at `/api`.
-Uvicorn launches that combined app.
-
-Public routes:
-    /               → Gradio landing (also what HF probes)
-    /api/healthz    → MCP health
+Public routes (served on port 7860):
+    /               → Gradio landing page (what HF's health probe hits)
+    /api/healthz    → MCP health probe
     /api/mcp        → MCP Streamable HTTP endpoint
+
+We let `demo.launch()` own the uvicorn (HF's Gradio SDK expects exactly this
+shape — queue, websocket, /info, /config, static files — nothing we want to
+reimplement). Once it's running we mount the MCP ASGI onto `demo.app` so
+`/api/*` is served by the same uvicorn.
 """
 from __future__ import annotations
 
 import os
+import threading
 
 import gradio as gr
-import uvicorn
-from gradio.routes import App as GradioApp
 
 from fitness_mcp.config import get_settings
 from fitness_mcp.http_server import build_asgi_app
@@ -73,15 +71,24 @@ def main() -> None:
     public_mcp_url = f"https://{host}{MCP_MOUNT_PATH}{settings.http_path}"
 
     landing = build_landing(public_mcp_url)
-    landing.queue()  # HF's probe expects the Gradio queue to be running
-
-    # Let Gradio build its own FastAPI app (gives HF everything it probes)
-    # then layer our MCP ASGI onto it at /api.
-    gradio_app = GradioApp.create_app(landing)
-    gradio_app.mount(MCP_MOUNT_PATH, mcp_asgi)
+    landing.queue()
 
     port = int(os.environ.get("PORT", 7860))
-    uvicorn.run(gradio_app, host="0.0.0.0", port=port, log_level=settings.log_level.lower())
+    # prevent_thread_lock=True returns immediately once uvicorn is bound,
+    # so we can keep configuring landing.app before entering the forever wait.
+    landing.launch(
+        server_name="0.0.0.0",
+        server_port=port,
+        prevent_thread_lock=True,
+        inbrowser=False,
+        quiet=False,
+        show_api=False,
+    )
+    # landing.app is the FastAPI instance uvicorn is now serving. Starlette
+    # mounts are consulted per-request, so adding this after launch is fine.
+    landing.app.mount(MCP_MOUNT_PATH, mcp_asgi)
+    # Block the main thread forever so the Python process stays alive.
+    threading.Event().wait()
 
 
 if __name__ == "__main__":
